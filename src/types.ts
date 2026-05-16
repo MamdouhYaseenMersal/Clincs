@@ -9,6 +9,7 @@ export interface Doctor {
   id: string;
   name: string;
   specialty: string;
+  examinationPrice: number;
   accountingSystem: DocAccountingSystem;
   fixedRate?: number;
   percentageRate?: number;

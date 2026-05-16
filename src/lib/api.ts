@@ -30,6 +30,14 @@ export const api = {
     });
     return res.json();
   },
+  updateDoctor: async (id: string, doctor: Partial<Doctor>): Promise<Doctor> => {
+    const res = await fetch(`${API_BASE}/doctors/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(doctor),
+    });
+    return res.json();
+  },
 
   // Visits
   getVisits: async (): Promise<Visit[]> => {

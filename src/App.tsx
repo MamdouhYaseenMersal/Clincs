@@ -608,6 +608,7 @@ function PatientModal({ onClose, onSubmit }: any) {
 // --- Doctors View ---
 function DoctorsView({ doctors, visits, onRefresh }: any) {
   const [isAdding, setIsAdding] = useState(false);
+  const [editingDoctor, setEditingDoctor] = useState<any>(null);
 
   const getDoctorMonthlyStats = (docId: string) => {
     const startOfMonth = dayjs().startOf('month');
@@ -647,14 +648,22 @@ function DoctorsView({ doctors, visits, onRefresh }: any) {
               <div className="absolute top-0 right-0 h-1.5 w-full bg-blue-500/10 group-hover:bg-blue-600 transition-colors"></div>
               
               <div className="p-6">
-                <div className="flex items-start gap-4 mb-6">
-                  <div className="size-14 bg-slate-50 text-slate-400 rounded-xl flex items-center justify-center font-bold text-xl group-hover:bg-blue-600 group-hover:text-white transition-all border border-slate-100 shadow-inner">
-                    {d.name[0]}
+                <div className="flex items-start justify-between mb-6">
+                  <div className="flex items-start gap-4">
+                    <div className="size-14 bg-slate-50 text-slate-400 rounded-xl flex items-center justify-center font-bold text-xl group-hover:bg-blue-600 group-hover:text-white transition-all border border-slate-100 shadow-inner" style={{ transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}>
+                      {d.name[0]}
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-black text-slate-900 text-lg">د. {d.name}</div>
+                      <div className="text-[10px] text-blue-600 font-black uppercase tracking-widest px-2 py-0.5 bg-blue-50 rounded inline-block border border-blue-100/50">{d.specialty}</div>
+                    </div>
                   </div>
-                  <div className="flex-1">
-                    <div className="font-black text-slate-900 text-lg">د. {d.name}</div>
-                    <div className="text-[10px] text-blue-600 font-black uppercase tracking-widest px-2 py-0.5 bg-blue-50 rounded inline-block border border-blue-100/50">{d.specialty}</div>
-                  </div>
+                  <button 
+                    onClick={() => setEditingDoctor(d)}
+                    className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                  >
+                    <FileText size={16} />
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 mb-6">
@@ -662,8 +671,12 @@ function DoctorsView({ doctors, visits, onRefresh }: any) {
                     <div className="text-[9px] text-slate-400 font-black uppercase tracking-tighter mb-1">كشوفات الشهر</div>
                     <div className="text-lg font-black text-slate-800">{stats.count}</div>
                   </div>
-                  <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100 text-center">
-                    <div className="text-[9px] text-emerald-600 font-black uppercase tracking-tighter mb-1">أتعاب الشهر</div>
+                  <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-center">
+                    <div className="text-[9px] text-blue-600 font-black uppercase tracking-tighter mb-1">سعر الكشف</div>
+                    <div className="text-lg font-black text-blue-700">{d.examinationPrice || 0} <span className="text-[10px]">ج.م</span></div>
+                  </div>
+                  <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100 text-center col-span-2">
+                    <div className="text-[9px] text-emerald-600 font-black uppercase tracking-tighter mb-1">أتعاب الشهر المتوقعة</div>
                     <div className="text-lg font-black text-emerald-700">{stats.earnings} <span className="text-[10px]">ج.م</span></div>
                   </div>
                 </div>
@@ -711,21 +724,33 @@ function DoctorsView({ doctors, visits, onRefresh }: any) {
             }} 
           />
         )}
+        {editingDoctor && (
+          <DoctorModal 
+            initialData={editingDoctor}
+            onClose={() => setEditingDoctor(null)} 
+            onSubmit={async (data: any) => {
+              await api.updateDoctor(editingDoctor.id, data);
+              onRefresh();
+              setEditingDoctor(null);
+            }} 
+          />
+        )}
       </AnimatePresence>
     </motion.div>
   );
 }
 
-function DoctorModal({ onClose, onSubmit }: any) {
+function DoctorModal({ onClose, onSubmit, initialData }: any) {
   const [formData, setFormData] = useState({ 
-    name: "", 
-    specialty: "", 
-    accountingSystem: DocAccountingSystem.FIXED,
-    fixedRate: 0,
-    percentageRate: 0,
-    dailyRate: 0,
-    hybridThreshold: 0,
-    hybridExtraRate: 0
+    name: initialData?.name || "", 
+    specialty: initialData?.specialty || "", 
+    examinationPrice: initialData?.examinationPrice || 0,
+    accountingSystem: initialData?.accountingSystem || DocAccountingSystem.FIXED,
+    fixedRate: initialData?.fixedRate || 0,
+    percentageRate: initialData?.percentageRate || 0,
+    dailyRate: initialData?.dailyRate || 0,
+    hybridThreshold: initialData?.hybridThreshold || 0,
+    hybridExtraRate: initialData?.hybridExtraRate || 0
   });
 
   return (
@@ -737,7 +762,7 @@ function DoctorModal({ onClose, onSubmit }: any) {
         className="bg-white w-full max-w-lg rounded-xl overflow-hidden shadow-2xl border border-slate-200"
       >
         <div className="p-5 bg-white border-b border-slate-100 flex items-center justify-between">
-          <h2 className="text-lg font-black text-slate-800">بيانات الطبيب ونظام المحاسبة</h2>
+          <h2 className="text-lg font-black text-slate-800">{initialData ? 'تعديل بيانات الدكتور' : 'إضافة دكتور جديد'}</h2>
           <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-lg transition-colors text-slate-400"><X size={20} /></button>
         </div>
         <form className="p-6 space-y-4 text-right overflow-y-auto max-h-[80vh]" onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }}>
@@ -746,9 +771,13 @@ function DoctorModal({ onClose, onSubmit }: any) {
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">اسم الدكتور</label>
               <input required type="text" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} />
             </div>
-            <div className="space-y-1 col-span-2">
+            <div className="space-y-1">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">التخصص</label>
               <input required type="text" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm" value={formData.specialty} onChange={(e) => setFormData({...formData, specialty: e.target.value})} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">سعر الكشف المحدد (ج.م)</label>
+              <input required type="number" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-black" value={formData.examinationPrice} onChange={(e) => setFormData({...formData, examinationPrice: Number(e.target.value)})} />
             </div>
           </div>
 
@@ -1175,7 +1204,7 @@ function InfoRow({ label, value }: { label: string, value: string }) {
 function VisitModal({ onClose, doctors, onSubmit }: any) {
   const [formData, setFormData] = useState({ 
     doctorId: doctors[0]?.id || "", 
-    basePrice: 0, 
+    basePrice: doctors[0]?.examinationPrice || 0, 
     notes: "", 
     date: dayjs().format('YYYY-MM-DDTHH:mm'),
     arrivalTime: dayjs().format('HH:mm'),
@@ -1183,6 +1212,14 @@ function VisitModal({ onClose, doctors, onSubmit }: any) {
     serviceType: "كشف عادي",
     sendingAdministration: ""
   });
+
+  // Auto-populate price when doctor changes
+  useEffect(() => {
+    const selectedDoc = doctors.find((d: any) => d.id === formData.doctorId);
+    if (selectedDoc) {
+      setFormData(prev => ({ ...prev, basePrice: selectedDoc.examinationPrice || 0 }));
+    }
+  }, [formData.doctorId, doctors]);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]">

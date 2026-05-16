@@ -102,6 +102,18 @@ async function startServer() {
     res.json(newDoctor);
   });
 
+  app.patch("/api/doctors/:id", async (req, res) => {
+    const db = await readDb();
+    const index = db.doctors.findIndex(d => d.id === req.params.id);
+    if (index !== -1) {
+      db.doctors[index] = { ...db.doctors[index], ...req.body };
+      await writeDb(db);
+      res.json(db.doctors[index]);
+    } else {
+      res.status(404).json({ error: "Doctor not found" });
+    }
+  });
+
   // Appointments
   app.get("/api/appointments", async (req, res) => {
     const db = await readDb();

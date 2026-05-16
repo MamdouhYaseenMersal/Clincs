@@ -1,0 +1,6 @@
+{
+  "name": "نظام إدارة العيادة - Clinic Care",
+  "description": "تطبيق متكامل لإدارة العيادات: تسجيل المرضى، تتبع الزيارات، رفع الروشتات والتقارير الطبية، ونظام محاسبي للأطباء.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -40,7 +40,7 @@ import {
   Cell
 } from 'recharts';
 import { api } from './lib/api';
-import { Patient, Doctor, Visit, Report, DocAccountingSystem, Appointment } from './types';
+import { Patient, Doctor, Visit, Report, DocAccountingSystem, Appointment, AuditLog } from './types';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/ar';
@@ -48,27 +48,30 @@ import 'dayjs/locale/ar';
 dayjs.extend(relativeTime);
 dayjs.locale('ar');
 
-type View = 'dashboard' | 'patients' | 'doctors' | 'accounting' | 'patient-profile';
+type View = 'dashboard' | 'patients' | 'doctors' | 'accounting' | 'patient-profile' | 'audit-logs';
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>('dashboard');
   const [patients, setPatients] = useState<Patient[]>([]);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   // Load Initial Data
   const loadData = async () => {
     try {
-      const [pts, docs, vst] = await Promise.all([
+      const [pts, docs, vst, logs] = await Promise.all([
         api.getPatients(),
         api.getDoctors(),
-        api.getVisits()
+        api.getVisits(),
+        api.getAuditLogs()
       ]);
       setPatients(pts);
       setDoctors(docs);
       setVisits(vst);
+      setAuditLogs(logs);
     } catch (error) {
       console.error("Failed to load data", error);
     }
@@ -130,6 +133,13 @@ export default function App() {
             onClick={() => setActiveView('accounting')} 
             collapsed={!isSidebarOpen}
           />
+          <NavItem 
+            icon={<FileText size={20} />} 
+            label="سجل العمليات (Audit)" 
+            active={activeView === 'audit-logs'} 
+            onClick={() => setActiveView('audit-logs')} 
+            collapsed={!isSidebarOpen}
+          />
         </nav>
 
         <div className="p-4 border-t border-slate-800">
@@ -184,6 +194,7 @@ export default function App() {
             {activeView === 'patients' && <PatientsView key="pts" patients={patients} onRefresh={loadData} onSelectPatient={navigateToProfile} />}
             {activeView === 'doctors' && <DoctorsView key="docs" doctors={doctors} visits={visits} onRefresh={loadData} />}
             {activeView === 'accounting' && <AccountingView key="acc" visits={visits} doctors={doctors} />}
+            {activeView === 'audit-logs' && <AuditLogsView key="audit" logs={auditLogs} />}
             {activeView === 'patient-profile' && selectedPatientId && (
               <PatientProfileView 
                 key="prof" 
@@ -609,39 +620,100 @@ function PatientModal({ onClose, onSubmit }: any) {
 function DoctorsView({ doctors, visits, onRefresh }: any) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingDoctor, setEditingDoctor] = useState<any>(null);
+  const [search, setSearch] = useState("");
+  const [specialtyFilter, setSpecialtyFilter] = useState("all");
+  const [sortBy, setSortBy] = useState<"name" | "specialty" | "earnings">("name");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+
+  const specialties = Array.from(new Set(doctors.map((d: any) => d.specialty)));
 
   const getDoctorMonthlyStats = (docId: string) => {
     const startOfMonth = dayjs().startOf('month');
     const doctorVisits = visits.filter((v: any) => v.doctorId === docId && dayjs(v.date).isAfter(startOfMonth));
     const totalEarnings = doctorVisits.reduce((acc: number, v: any) => acc + (v.doctorEarnings || 0), 0);
-    
-    // For daily/hybrid, we also need to count days worked if we want to show daily salary
-    // However, for simplicity now, we just sum the visit earnings.
-    // In a real system, we'd have a separate table for daily salaries or days worked.
     return {
       count: doctorVisits.length,
       earnings: totalEarnings
     };
   };
 
+  const filteredDoctors = doctors
+    .filter((d: any) => d.name.includes(search))
+    .filter((d: any) => specialtyFilter === "all" || d.specialty === specialtyFilter)
+    .sort((a: any, b: any) => {
+      let valA: any, valB: any;
+      if (sortBy === "earnings") {
+        valA = getDoctorMonthlyStats(a.id).earnings;
+        valB = getDoctorMonthlyStats(b.id).earnings;
+      } else {
+        valA = a[sortBy];
+        valB = b[sortBy];
+      }
+
+      if (valA < valB) return sortOrder === "asc" ? -1 : 1;
+      if (valA > valB) return sortOrder === "asc" ? 1 : -1;
+      return 0;
+    });
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
         <div>
           <h1 className="text-2xl font-black text-slate-800 tracking-tight">طاقم الأطباء</h1>
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">إدارة الدكاترة ونظام المحاسبة المتقدم</p>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">إدارة الدكاترة ونظام المحاسبة المتقدم</p>
         </div>
         <button 
           onClick={() => setIsAdding(true)}
-          className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/10 text-sm"
+          className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/10 text-sm active:scale-95"
         >
           <Plus size={18} />
-          <span>إضافة دكتور</span>
+          <span>إضافة دكتور جديد</span>
         </button>
       </header>
 
+      {/* Filters & Search */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center">
+        <div className="relative flex-1 w-full">
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+          <input 
+            type="text" 
+            placeholder="بحث بالاسم..." 
+            className="w-full pr-10 pl-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <div className="flex gap-2 w-full md:w-auto">
+          <select 
+            className="flex-1 md:w-40 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-600 focus:outline-none"
+            value={specialtyFilter}
+            onChange={(e) => setSpecialtyFilter(e.target.value)}
+          >
+            <option value="all">كل التخصصات</option>
+            {specialties.map(spec => (
+              <option key={spec as string} value={spec as string}>{spec as string}</option>
+            ))}
+          </select>
+          <select 
+            className="flex-1 md:w-40 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-600 focus:outline-none"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+          >
+            <option value="name">ترتيب بالاسم</option>
+            <option value="specialty">ترتيب بالتخصص</option>
+            <option value="earnings">ترتيب بالأرباح</option>
+          </select>
+          <button 
+            onClick={() => setSortOrder(prev => prev === "asc" ? "desc" : "asc")}
+            className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-400 hover:text-blue-600 transition-colors"
+          >
+            {sortOrder === "asc" ? "↑" : "↓"}
+          </button>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {doctors.map((d: any) => {
+        {filteredDoctors.map((d: any) => {
           const stats = getDoctorMonthlyStats(d.id);
           return (
             <div key={d.id} className="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all relative overflow-hidden group">
@@ -710,7 +782,7 @@ function DoctorsView({ doctors, visits, onRefresh }: any) {
             </div>
           );
         })}
-        {doctors.length === 0 && <div className="col-span-full py-20 text-center text-slate-300 italic">لم يتم تسجيل أطباء بعد</div>}
+        {filteredDoctors.length === 0 && <div className="col-span-full py-20 text-center text-slate-300 italic">لا توجد نتائج مطابقة لخيارات البحث</div>}
       </div>
 
       <AnimatePresence>
@@ -1696,6 +1768,65 @@ function AccountingView({ visits, doctors }: any) {
                </tbody>
             </table>
           </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function AuditLogsView({ logs }: { logs: AuditLog[], key?: string }) {
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
+      <header className="flex items-center justify-between bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <div>
+          <h1 className="text-2xl font-black text-slate-800 tracking-tight">سجل العمليات (Audit Log)</h1>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">تتبع الحركات والعمليات الحساسة في النظام</p>
+        </div>
+      </header>
+
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full text-right border-collapse">
+            <thead>
+              <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest">
+                <th className="px-6 py-4 border-b border-slate-100">التاريخ والوقت</th>
+                <th className="px-6 py-4 border-b border-slate-100">العملية</th>
+                <th className="px-6 py-4 border-b border-slate-100">النوع</th>
+                <th className="px-6 py-4 border-b border-slate-100">التفاصيل</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50 text-sm">
+              {logs.map((log) => (
+                <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-6 py-4">
+                    <div className="font-bold text-slate-700">{dayjs(log.timestamp).format('YYYY/MM/DD')}</div>
+                    <div className="text-[10px] text-slate-400 font-mono italic">{dayjs(log.timestamp).format('HH:mm:ss')}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                      log.action === 'CREATE' ? 'bg-green-100 text-green-700' : 
+                      log.action === 'UPDATE' ? 'bg-blue-100 text-blue-700' : 
+                      'bg-slate-100 text-slate-700'
+                    }`}>
+                      {log.action}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{log.entityType}</span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-slate-800 font-medium">{log.details}</div>
+                    <div className="text-[9px] text-slate-400 font-mono truncate max-w-xs">{log.entityId}</div>
+                  </td>
+                </tr>
+              ))}
+              {logs.length === 0 && (
+                <tr>
+                   <td colSpan={4} className="px-6 py-20 text-center text-slate-300 italic">سجل العمليات فارغ حالياً</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </motion.div>

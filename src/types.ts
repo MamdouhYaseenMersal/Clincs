@@ -69,3 +69,13 @@ export interface Report {
   type: 'prescription' | 'report' | 'other';
   createdAt: string;
 }
+
+export interface AuditLog {
+  id: string;
+  action: string;
+  entityId: string;
+  entityType: 'doctor' | 'patient' | 'appointment' | 'visit' | 'report';
+  userId?: string;
+  details: string;
+  timestamp: string;
+}

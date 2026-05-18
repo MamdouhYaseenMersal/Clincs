@@ -17,6 +17,7 @@ interface Database {
   visits: any[];
   reports: any[];
   appointments: any[];
+  auditLogs: any[];
 }
 
 const DEFAULT_DB: Database = {
@@ -25,6 +26,7 @@ const DEFAULT_DB: Database = {
   visits: [],
   reports: [],
   appointments: [],
+  auditLogs: [],
 };
 
 async function readDb(): Promise<Database> {
@@ -35,8 +37,9 @@ async function readDb(): Promise<Database> {
     }
     const data = await fs.readFile(DB_FILE, "utf-8");
     const parsed = JSON.parse(data);
-    // Ensure appointments array exists for legacy databases
+    // Ensure arrays exist for legacy databases
     if (!parsed.appointments) parsed.appointments = [];
+    if (!parsed.auditLogs) parsed.auditLogs = [];
     return parsed;
   } catch (err) {
     console.error("Error reading DB", err);
@@ -46,6 +49,19 @@ async function readDb(): Promise<Database> {
 
 async function writeDb(db: Database) {
   await fs.writeFile(DB_FILE, JSON.stringify(db, null, 2));
+}
+
+async function logAction(db: Database, action: string, entityId: string, entityType: string, details: string, userId?: string) {
+  const log = {
+    id: uuidv4(),
+    action,
+    entityId,
+    entityType,
+    details,
+    userId,
+    timestamp: new Date().toISOString()
+  };
+  db.auditLogs.push(log);
 }
 
 // Multer setup for uploads
@@ -74,6 +90,12 @@ async function startServer() {
 
   // API Routes
   
+  // Audit Logs
+  app.get("/api/audit-logs", async (req, res) => {
+    const db = await readDb();
+    res.json(db.auditLogs.slice().reverse());
+  });
+
   // Patients
   app.get("/api/patients", async (req, res) => {
     const db = await readDb();
@@ -98,6 +120,7 @@ async function startServer() {
     const db = await readDb();
     const newDoctor = { ...req.body, id: uuidv4() };
     db.doctors.push(newDoctor);
+    await logAction(db, "CREATE", newDoctor.id, "doctor", `Added new doctor: ${newDoctor.name}`);
     await writeDb(db);
     res.json(newDoctor);
   });
@@ -106,7 +129,9 @@ async function startServer() {
     const db = await readDb();
     const index = db.doctors.findIndex(d => d.id === req.params.id);
     if (index !== -1) {
+      const oldName = db.doctors[index].name;
       db.doctors[index] = { ...db.doctors[index], ...req.body };
+      await logAction(db, "UPDATE", db.doctors[index].id, "doctor", `Updated doctor: ${oldName} -> ${db.doctors[index].name}`);
       await writeDb(db);
       res.json(db.doctors[index]);
     } else {

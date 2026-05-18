@@ -1,4 +1,4 @@
-import { Patient, Doctor, Visit, Report, Appointment } from '../types';
+import { Patient, Doctor, Visit, Report, Appointment, AuditLog } from '../types';
 
 const API_BASE = '/api';
 
@@ -93,6 +93,12 @@ export const api = {
       method: 'POST',
       body: formData,
     });
+    return res.json();
+  },
+
+  // Audit Logs
+  getAuditLogs: async (): Promise<AuditLog[]> => {
+    const res = await fetch(`${API_BASE}/audit-logs`);
     return res.json();
   }
 };

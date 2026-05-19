@@ -21,7 +21,10 @@ import {
   Filter,
   BarChart as BarChartIcon,
   LineChart as LineChartIcon,
-  PieChart as PieChartIcon
+  PieChart as PieChartIcon,
+  Package,
+  AlertTriangle,
+  Archive
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -40,7 +43,7 @@ import {
   Cell
 } from 'recharts';
 import { api } from './lib/api';
-import { Patient, Doctor, Visit, Report, DocAccountingSystem, Appointment, AuditLog } from './types';
+import { Patient, Doctor, Visit, Report, DocAccountingSystem, Appointment, AuditLog, InventoryItem } from './types';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/ar';
@@ -48,7 +51,7 @@ import 'dayjs/locale/ar';
 dayjs.extend(relativeTime);
 dayjs.locale('ar');
 
-type View = 'dashboard' | 'patients' | 'doctors' | 'accounting' | 'patient-profile' | 'audit-logs';
+type View = 'dashboard' | 'patients' | 'doctors' | 'accounting' | 'patient-profile' | 'audit-logs' | 'inventory';
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>('dashboard');
@@ -56,22 +59,25 @@ export default function App() {
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   // Load Initial Data
   const loadData = async () => {
     try {
-      const [pts, docs, vst, logs] = await Promise.all([
+      const [pts, docs, vst, logs, inv] = await Promise.all([
         api.getPatients(),
         api.getDoctors(),
         api.getVisits(),
-        api.getAuditLogs()
+        api.getAuditLogs(),
+        api.getInventory()
       ]);
       setPatients(pts);
       setDoctors(docs);
       setVisits(vst);
       setAuditLogs(logs);
+      setInventory(inv);
     } catch (error) {
       console.error("Failed to load data", error);
     }
@@ -131,6 +137,13 @@ export default function App() {
             label="المحاسبة والتقارير" 
             active={activeView === 'accounting'} 
             onClick={() => setActiveView('accounting')} 
+            collapsed={!isSidebarOpen}
+          />
+          <NavItem 
+            icon={<Archive size={20} />} 
+            label="المخزن" 
+            active={activeView === 'inventory'} 
+            onClick={() => setActiveView('inventory')} 
             collapsed={!isSidebarOpen}
           />
           <NavItem 
@@ -194,6 +207,7 @@ export default function App() {
             {activeView === 'patients' && <PatientsView key="pts" patients={patients} onRefresh={loadData} onSelectPatient={navigateToProfile} />}
             {activeView === 'doctors' && <DoctorsView key="docs" doctors={doctors} visits={visits} onRefresh={loadData} />}
             {activeView === 'accounting' && <AccountingView key="acc" visits={visits} doctors={doctors} />}
+            {activeView === 'inventory' && <InventoryView key="inv" inventory={inventory} onRefresh={loadData} />}
             {activeView === 'audit-logs' && <AuditLogsView key="audit" logs={auditLogs} />}
             {activeView === 'patient-profile' && selectedPatientId && (
               <PatientProfileView 
@@ -1241,7 +1255,13 @@ function PatientProfileView({ patientId, doctors, onRefresh, onBack }: any) {
             visits={patientVisits}
             doctors={doctors}
             onUpload={async (file: File, title: string, type: string, visitId: string) => {
-              await api.uploadReport(patientId, file, title, type, visitId);
+              let finalVisitId = visitId;
+              if (!finalVisitId && patientVisits.length > 0) {
+                // Find most recent visit
+                const sortedVisits = [...patientVisits].sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                finalVisitId = sortedVisits[0].id;
+              }
+              await api.uploadReport(patientId, file, title, type, finalVisitId);
               loadProfile();
               setIsUploading(false);
             }} 
@@ -1771,6 +1791,213 @@ function AccountingView({ visits, doctors }: any) {
         </div>
       </div>
     </motion.div>
+  );
+}
+
+function InventoryView({ inventory, onRefresh }: { inventory: InventoryItem[], onRefresh: () => void, key?: string }) {
+  const [isAdding, setIsAdding] = useState(false);
+  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
+  const [search, setSearch] = useState("");
+
+  const filteredInventory = inventory.filter(item => 
+    item.name.toLowerCase().includes(search.toLowerCase()) || 
+    item.category.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const isLowStock = (item: InventoryItem) => item.quantity <= item.reorderPoint;
+  const isExpiringSoon = (date?: string) => {
+    if (!date) return false;
+    return dayjs(date).diff(dayjs(), 'month') <= 3 && dayjs(date).diff(dayjs(), 'month') >= 0;
+  };
+  const isExpired = (date?: string) => {
+    if (!date) return false;
+    return dayjs(date).isBefore(dayjs());
+  };
+
+  const handleDelete = async (id: string) => {
+    if (confirm("هل أنت متأكد من حذف هذا الصنف؟")) {
+      await api.deleteInventoryItem(id);
+      onRefresh();
+    }
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <div>
+          <h1 className="text-2xl font-black text-slate-800 tracking-tight">المخزن والمستلزمات</h1>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">تتبع الأدوية والمستلزمات الطبية وتاريخ الصلاحية</p>
+        </div>
+        <button 
+          onClick={() => setIsAdding(true)}
+          className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/10 text-sm"
+        >
+          <Package size={18} />
+          <span>إضافة صنف جديد</span>
+        </button>
+      </header>
+
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center">
+        <div className="relative flex-1 w-full">
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+          <input 
+            type="text" 
+            placeholder="بحث بالاسم أو النوع..." 
+            className="w-full pr-10 pl-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full text-right border-collapse">
+            <thead>
+              <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest">
+                <th className="px-6 py-4 border-b border-slate-100">الصنف</th>
+                <th className="px-6 py-4 border-b border-slate-100">النوع</th>
+                <th className="px-6 py-4 border-b border-slate-100">الكمية الحالية</th>
+                <th className="px-6 py-4 border-b border-slate-100">حد الطلب</th>
+                <th className="px-6 py-4 border-b border-slate-100">تاريخ الصلاحية</th>
+                <th className="px-6 py-4 border-b border-slate-100">الإجراءات</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50 text-sm">
+              {filteredInventory.map((item) => (
+                <tr key={item.id} className={`hover:bg-slate-50 transition-colors ${isLowStock(item) ? 'bg-amber-50/30' : ''}`}>
+                  <td className="px-6 py-4">
+                    <div className="font-bold text-slate-800">{item.name}</div>
+                    <div className="text-[10px] text-slate-400">آخر تحديث: {dayjs(item.lastUpdated).fromNow()}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase">
+                      {item.category === 'medication' ? 'دواء' : 
+                       item.category === 'disposable' ? 'مستلزم' : 
+                       item.category === 'equipment' ? 'جهاز' : 'أخرى'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 font-black">
+                    <div className="flex items-center gap-2">
+                      <span className={isLowStock(item) ? 'text-amber-600' : 'text-slate-700'}>
+                        {item.quantity} {item.unit}
+                      </span>
+                      {isLowStock(item) && <AlertTriangle size={14} className="text-amber-500" />}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-slate-400 font-bold">{item.reorderPoint} {item.unit}</td>
+                  <td className="px-6 py-4">
+                    {item.expirationDate ? (
+                      <div className="flex flex-col">
+                        <span className={isExpired(item.expirationDate) ? 'text-red-500 font-black' : isExpiringSoon(item.expirationDate) ? 'text-amber-500 font-black' : 'text-slate-600'}>
+                          {dayjs(item.expirationDate).format('YYYY/MM/DD')}
+                        </span>
+                        {isExpired(item.expirationDate) && <span className="text-[9px] text-red-500 uppercase font-black">منتهي الصلاحية</span>}
+                        {isExpiringSoon(item.expirationDate) && !isExpired(item.expirationDate) && <span className="text-[9px] text-amber-500 uppercase font-black">ينتهي قريباً</span>}
+                      </div>
+                    ) : (
+                      <span className="text-slate-300 italic">N/A</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4 space-x-2 space-x-reverse">
+                    <button onClick={() => setEditingItem(item)} className="p-1.5 hover:bg-blue-50 text-slate-400 hover:text-blue-600 rounded transition-all"><FileText size={16} /></button>
+                    <button onClick={() => handleDelete(item.id)} className="p-1.5 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded transition-all"><X size={16} /></button>
+                  </td>
+                </tr>
+              ))}
+              {filteredInventory.length === 0 && (
+                <tr>
+                   <td colSpan={6} className="px-6 py-20 text-center text-slate-300 italic">لا توجد أصناف في المخزن حالياً</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {(isAdding || editingItem) && (
+          <InventoryModal 
+            onClose={() => { setIsAdding(false); setEditingItem(null); }} 
+            onSubmit={async (data) => {
+              if (editingItem) {
+                await api.updateInventoryItem(editingItem.id, data);
+              } else {
+                await api.addInventoryItem(data);
+              }
+              setIsAdding(false);
+              setEditingItem(null);
+              onRefresh();
+            }}
+            initialData={editingItem}
+          />
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+function InventoryModal({ onClose, onSubmit, initialData }: any) {
+  const [formData, setFormData] = useState({
+    name: initialData?.name || "",
+    category: initialData?.category || "medication",
+    quantity: initialData?.quantity || 0,
+    unit: initialData?.unit || "عبوة",
+    reorderPoint: initialData?.reorderPoint || 0,
+    expirationDate: initialData?.expirationDate || ""
+  });
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.98, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, y: 10 }}
+        className="bg-white w-full max-w-lg rounded-xl overflow-hidden shadow-2xl border border-slate-200"
+      >
+        <div className="p-5 bg-white border-b border-slate-100 flex items-center justify-between">
+          <h2 className="text-lg font-black text-slate-800">{initialData ? 'تعديل الصنف' : 'إضافة صنف للمخزن'}</h2>
+          <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-lg transition-colors text-slate-400"><X size={20} /></button>
+        </div>
+        <form className="p-6 space-y-4 text-right" onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }}>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1 col-span-2">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">اسم الصنف</label>
+              <input required type="text" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">النوع</label>
+              <select className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.category} onChange={(e) => setFormData({...formData, category: e.target.value as any})}>
+                <option value="medication">دواء / علاج</option>
+                <option value="disposable">مستلزمات طبية</option>
+                <option value="equipment">أجهزة ومعدات</option>
+                <option value="other">أخرى</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">وحدة القياس</label>
+              <input required type="text" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm" value={formData.unit} onChange={(e) => setFormData({...formData, unit: e.target.value})} placeholder="مثال: عبوة، قطعة" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">الكمية الحالية</label>
+              <input required type="number" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.quantity} onChange={(e) => setFormData({...formData, quantity: Number(e.target.value)})} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">حد إعادة الطلب</label>
+              <input required type="number" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.reorderPoint} onChange={(e) => setFormData({...formData, reorderPoint: Number(e.target.value)})} />
+            </div>
+            <div className="space-y-1 col-span-2">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">تاريخ الصلاحية (اختياري)</label>
+              <input type="date" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm" value={formData.expirationDate} onChange={(e) => setFormData({...formData, expirationDate: e.target.value})} />
+            </div>
+          </div>
+          <div className="pt-4 flex gap-3">
+            <button type="submit" className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-900/10 text-sm">حفظ الصنف</button>
+            <button type="button" onClick={onClose} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-lg hover:bg-slate-200 text-sm">إلغاء</button>
+          </div>
+        </form>
+      </motion.div>
+    </div>
   );
 }
 

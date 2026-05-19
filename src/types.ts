@@ -70,6 +70,17 @@ export interface Report {
   createdAt: string;
 }
 
+export interface InventoryItem {
+  id: string;
+  name: string;
+  category: 'medication' | 'disposable' | 'equipment' | 'other';
+  quantity: number;
+  unit: string;
+  reorderPoint: number;
+  expirationDate?: string;
+  lastUpdated: string;
+}
+
 export interface AuditLog {
   id: string;
   action: string;

@@ -18,6 +18,7 @@ interface Database {
   reports: any[];
   appointments: any[];
   auditLogs: any[];
+  inventory: any[];
 }
 
 const DEFAULT_DB: Database = {
@@ -27,6 +28,7 @@ const DEFAULT_DB: Database = {
   reports: [],
   appointments: [],
   auditLogs: [],
+  inventory: [],
 };
 
 async function readDb(): Promise<Database> {
@@ -40,6 +42,7 @@ async function readDb(): Promise<Database> {
     // Ensure arrays exist for legacy databases
     if (!parsed.appointments) parsed.appointments = [];
     if (!parsed.auditLogs) parsed.auditLogs = [];
+    if (!parsed.inventory) parsed.inventory = [];
     return parsed;
   } catch (err) {
     console.error("Error reading DB", err);
@@ -94,6 +97,49 @@ async function startServer() {
   app.get("/api/audit-logs", async (req, res) => {
     const db = await readDb();
     res.json(db.auditLogs.slice().reverse());
+  });
+
+  // Inventory
+  app.get("/api/inventory", async (req, res) => {
+    const db = await readDb();
+    res.json(db.inventory);
+  });
+
+  app.post("/api/inventory", async (req, res) => {
+    const db = await readDb();
+    const newItem = { ...req.body, id: uuidv4(), lastUpdated: new Date().toISOString() };
+    db.inventory.push(newItem);
+    await logAction(db, "CREATE", newItem.id, "inventory", `Added inventory item: ${newItem.name}`);
+    await writeDb(db);
+    res.json(newItem);
+  });
+
+  app.patch("/api/inventory/:id", async (req, res) => {
+    const db = await readDb();
+    const index = db.inventory.findIndex(i => i.id === req.params.id);
+    if (index !== -1) {
+      const oldName = db.inventory[index].name;
+      db.inventory[index] = { ...db.inventory[index], ...req.body, lastUpdated: new Date().toISOString() };
+      await logAction(db, "UPDATE", req.params.id, "inventory", `Updated inventory item: ${oldName}`);
+      await writeDb(db);
+      res.json(db.inventory[index]);
+    } else {
+      res.status(404).json({ error: "Item not found" });
+    }
+  });
+
+  app.delete("/api/inventory/:id", async (req, res) => {
+    const db = await readDb();
+    const index = db.inventory.findIndex(i => i.id === req.params.id);
+    if (index !== -1) {
+      const itemName = db.inventory[index].name;
+      db.inventory.splice(index, 1);
+      await logAction(db, "DELETE", req.params.id, "inventory", `Deleted inventory item: ${itemName}`);
+      await writeDb(db);
+      res.sendStatus(200);
+    } else {
+      res.status(404).json({ error: "Item not found" });
+    }
   });
 
   // Patients

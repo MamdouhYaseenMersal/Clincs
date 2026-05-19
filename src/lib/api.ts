@@ -1,8 +1,33 @@
-import { Patient, Doctor, Visit, Report, Appointment, AuditLog } from '../types';
+import { Patient, Doctor, Visit, Report, Appointment, AuditLog, InventoryItem } from '../types';
 
 const API_BASE = '/api';
 
 export const api = {
+  // Inventory
+  getInventory: async (): Promise<InventoryItem[]> => {
+    const res = await fetch(`${API_BASE}/inventory`);
+    return res.json();
+  },
+  addInventoryItem: async (item: Omit<InventoryItem, 'id' | 'lastUpdated'>): Promise<InventoryItem> => {
+    const res = await fetch(`${API_BASE}/inventory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(item),
+    });
+    return res.json();
+  },
+  updateInventoryItem: async (id: string, item: Partial<InventoryItem>): Promise<InventoryItem> => {
+    const res = await fetch(`${API_BASE}/inventory/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(item),
+    });
+    return res.json();
+  },
+  deleteInventoryItem: async (id: string): Promise<void> => {
+    await fetch(`${API_BASE}/inventory/${id}`, { method: 'DELETE' });
+  },
+
   // Patients
   getPatients: async (): Promise<Patient[]> => {
     const res = await fetch(`${API_BASE}/patients`);

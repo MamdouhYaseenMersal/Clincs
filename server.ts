@@ -19,6 +19,7 @@ interface Database {
   appointments: any[];
   auditLogs: any[];
   inventory: any[];
+  users: any[];
 }
 
 const DEFAULT_DB: Database = {
@@ -29,6 +30,7 @@ const DEFAULT_DB: Database = {
   appointments: [],
   auditLogs: [],
   inventory: [],
+  users: [],
 };
 
 async function readDb(): Promise<Database> {
@@ -43,6 +45,7 @@ async function readDb(): Promise<Database> {
     if (!parsed.appointments) parsed.appointments = [];
     if (!parsed.auditLogs) parsed.auditLogs = [];
     if (!parsed.inventory) parsed.inventory = [];
+    if (!parsed.users) parsed.users = [];
     return parsed;
   } catch (err) {
     console.error("Error reading DB", err);
@@ -84,6 +87,39 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+function calculateVisitEarnings(db: Database, doctorId: string, basePrice: number, dateStr?: string, skipVisitId?: string) {
+  const doctor = db.doctors.find(d => d.id === doctorId);
+  const cost = Number(basePrice || 0);
+  let doctorEarnings = 0;
+
+  if (doctor) {
+    if (doctor.accountingSystem === 'fixed') {
+      doctorEarnings = Number(doctor.fixedRate || 0);
+    } else if (doctor.accountingSystem === 'percentage') {
+      const percentage = Number(doctor.percentageRate || 0);
+      doctorEarnings = (cost * percentage) / 100;
+    } else if (doctor.accountingSystem === 'hybrid') {
+      const visitDate = (dateStr || new Date().toISOString()).split('T')[0];
+      const count = db.visits.filter(v => 
+        v.doctorId === doctor.id && 
+        v.id !== skipVisitId &&
+        (v.date || '').split('T')[0] === visitDate
+      ).length;
+
+      if (count >= (doctor.hybridThreshold || 0)) {
+        doctorEarnings = Number(doctor.hybridExtraRate || 0);
+      } else {
+        doctorEarnings = 0; // Covered by daily rate
+      }
+    } else if (doctor.accountingSystem === 'daily') {
+      doctorEarnings = 0; // Daily rate is computed in list / payroll, individual visits earn 0
+    }
+  }
+
+  const clinicEarnings = cost - doctorEarnings;
+  return { cost, doctorEarnings, clinicEarnings };
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -97,6 +133,35 @@ async function startServer() {
   app.get("/api/audit-logs", async (req, res) => {
     const db = await readDb();
     res.json(db.auditLogs.slice().reverse());
+  });
+
+  // Users
+  app.get("/api/users", async (req, res) => {
+    const db = await readDb();
+    res.json(db.users);
+  });
+
+  app.post("/api/users", async (req, res) => {
+    const db = await readDb();
+    const newUser = { ...req.body, id: uuidv4() };
+    db.users.push(newUser);
+    await logAction(db, "CREATE", newUser.id, "user", `Added user: ${newUser.username}`);
+    await writeDb(db);
+    res.json(newUser);
+  });
+
+  app.delete("/api/users/:id", async (req, res) => {
+    const db = await readDb();
+    const index = db.users.findIndex(u => u.id === req.params.id);
+    if (index !== -1) {
+      const username = db.users[index].username;
+      db.users.splice(index, 1);
+      await logAction(db, "DELETE", req.params.id, "user", `Deleted user: ${username}`);
+      await writeDb(db);
+      res.sendStatus(200);
+    } else {
+      res.status(404).json({ error: "User not found" });
+    }
   });
 
   // Inventory
@@ -156,6 +221,19 @@ async function startServer() {
     res.json(newPatient);
   });
 
+  app.patch("/api/patients/:id", async (req, res) => {
+    const db = await readDb();
+    const index = db.patients.findIndex(p => p.id === req.params.id);
+    if (index !== -1) {
+      db.patients[index] = { ...db.patients[index], ...req.body };
+      await logAction(db, "UPDATE", req.params.id, "patient", `Updated patient data for: ${db.patients[index].name}`);
+      await writeDb(db);
+      res.json(db.patients[index]);
+    } else {
+      res.status(404).json({ error: "Patient not found" });
+    }
+  });
+
   // Doctors
   app.get("/api/doctors", async (req, res) => {
     const db = await readDb();
@@ -206,6 +284,7 @@ async function startServer() {
       createdAt: new Date().toISOString() 
     };
     db.appointments.push(newAppointment);
+    await logAction(db, "CREATE", newAppointment.id, "appointment", `Scheduled appointment for date: ${newAppointment.date}`);
     await writeDb(db);
     res.json(newAppointment);
   });
@@ -214,8 +293,41 @@ async function startServer() {
     const db = await readDb();
     const index = db.appointments.findIndex(a => a.id === req.params.id);
     if (index !== -1) {
+      const oldStatus = db.appointments[index].status;
       if (req.body.status) db.appointments[index].status = req.body.status;
       if (req.body.reminderSent !== undefined) db.appointments[index].reminderSent = req.body.reminderSent;
+      
+      if (req.body.status && req.body.status !== oldStatus) {
+        await logAction(db, "UPDATE", req.params.id, "appointment", `Changed appointment status to ${req.body.status}`);
+      }
+      
+      await writeDb(db);
+      res.json(db.appointments[index]);
+    } else {
+      res.status(404).json({ error: "Appointment not found" });
+    }
+  });
+
+  app.delete("/api/appointments/:id", async (req, res) => {
+    const db = await readDb();
+    const index = db.appointments.findIndex(a => a.id === req.params.id);
+    if (index !== -1) {
+      const appointment = db.appointments[index];
+      db.appointments.splice(index, 1);
+      await logAction(db, "DELETE", req.params.id, "appointment", `Deleted appointment for tomorrow/future`);
+      await writeDb(db);
+      res.sendStatus(200);
+    } else {
+      res.status(404).json({ error: "Appointment not found" });
+    }
+  });
+
+  app.post("/api/appointments/:id/remind", async (req, res) => {
+    const db = await readDb();
+    const index = db.appointments.findIndex(a => a.id === req.params.id);
+    if (index !== -1) {
+      db.appointments[index].reminderSent = true;
+      await logAction(db, "UPDATE", req.params.id, "appointment", `Sent reminder for appointment on ${db.appointments[index].date}`);
       await writeDb(db);
       res.json(db.appointments[index]);
     } else {
@@ -231,35 +343,11 @@ async function startServer() {
 
   app.post("/api/visits", async (req, res) => {
     const db = await readDb();
-    const doctor = db.doctors.find(d => d.id === req.body.doctorId);
-    
-    let cost = Number(req.body.basePrice || 0);
-    let doctorEarnings = 0;
+    const doctorId = req.body.doctorId;
+    const basePrice = Number(req.body.basePrice || 0);
+    const date = req.body.date || new Date().toISOString();
 
-    if (doctor) {
-      if (doctor.accountingSystem === 'fixed') {
-        doctorEarnings = Number(doctor.fixedRate || 0);
-      } else if (doctor.accountingSystem === 'percentage') {
-        const percentage = Number(doctor.percentageRate || 0);
-        doctorEarnings = (cost * percentage) / 100;
-      } else if (doctor.accountingSystem === 'hybrid') {
-        const today = new Date().toISOString().split('T')[0];
-        const todayVisitsCount = db.visits.filter(v => 
-          v.doctorId === doctor.id && 
-          new Date(v.date).toISOString().split('T')[0] === today
-        ).length;
-
-        if (todayVisitsCount >= (doctor.hybridThreshold || 0)) {
-          doctorEarnings = Number(doctor.hybridExtraRate || 0);
-        } else {
-          doctorEarnings = 0; // Covered by daily part of hybrid
-        }
-      } else if (doctor.accountingSystem === 'daily') {
-        doctorEarnings = 0; // Daily salary is separate
-      }
-    }
-
-    const clinicEarnings = cost - doctorEarnings;
+    const { cost, doctorEarnings, clinicEarnings } = calculateVisitEarnings(db, doctorId, basePrice, date);
 
     const newVisit = { 
       ...req.body, 
@@ -267,11 +355,38 @@ async function startServer() {
       cost,
       doctorEarnings,
       clinicEarnings,
-      date: req.body.date || new Date().toISOString() 
+      isPaid: req.body.isPaid !== undefined ? req.body.isPaid : true,
+      date
     };
     db.visits.push(newVisit);
     await writeDb(db);
     res.json(newVisit);
+  });
+
+  app.patch("/api/visits/:id", async (req, res) => {
+    const db = await readDb();
+    const index = db.visits.findIndex(v => v.id === req.params.id);
+    if (index !== -1) {
+      const mergedVisit = { ...db.visits[index], ...req.body };
+      const doctorId = mergedVisit.doctorId;
+      const basePrice = Number(mergedVisit.basePrice || 0);
+      const date = mergedVisit.date;
+
+      const { cost, doctorEarnings, clinicEarnings } = calculateVisitEarnings(db, doctorId, basePrice, date, req.params.id);
+
+      db.visits[index] = {
+        ...mergedVisit,
+        cost,
+        doctorEarnings,
+        clinicEarnings
+      };
+
+      await logAction(db, "UPDATE", req.params.id, "visit", `Updated details for visit: ${db.visits[index].id}`);
+      await writeDb(db);
+      res.json(db.visits[index]);
+    } else {
+      res.status(404).json({ error: "Visit not found" });
+    }
   });
 
   // Reports / File Upload

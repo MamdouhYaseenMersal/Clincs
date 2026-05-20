@@ -16,6 +16,7 @@ export interface Doctor {
   dailyRate?: number;
   hybridThreshold?: number;
   hybridExtraRate?: number;
+  maxPatientsPerDay?: number;
 }
 
 export interface Patient {
@@ -28,6 +29,8 @@ export interface Patient {
   caseCode: string;
   commissionNumber: string;
   dateOfBirth?: string;
+  nationalId?: string;
+  passportNumber?: string;
   createdAt: string;
 }
 
@@ -41,6 +44,8 @@ export interface Appointment {
   reminderEnabled: boolean;
   reminderLeadTimeHours: number;
   reminderSent?: boolean;
+  isSpecial?: boolean;
+  specialPrice?: number;
   createdAt: string;
 }
 
@@ -54,9 +59,14 @@ export interface Visit {
   serviceType: string; // بند الحجز
   sendingAdministration?: string; // الإدارة المرسلة
   basePrice: number;
+  cost: number;
   doctorEarnings: number;
   clinicEarnings: number;
   notes: string;
+  diagnosis?: string;
+  isPaid: boolean;
+  status?: 'completed' | 'cancelled';
+  cancellationReason?: string;
 }
 
 export interface Report {
@@ -68,6 +78,16 @@ export interface Report {
   title: string;
   type: 'prescription' | 'report' | 'other';
   createdAt: string;
+}
+
+export interface User {
+  id: string;
+  name: string;
+  username: string;
+  role: 'admin' | 'staff' | 'doctor';
+  password?: string;
+  doctorId?: string; // If user is a doctor
+  permissions?: string[];
 }
 
 export interface InventoryItem {

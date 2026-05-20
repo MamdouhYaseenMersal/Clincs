@@ -1,4 +1,4 @@
-import { Patient, Doctor, Visit, Report, Appointment, AuditLog, InventoryItem } from '../types';
+import { Patient, Doctor, Visit, Report, Appointment, AuditLog, InventoryItem, User } from '../types';
 
 const API_BASE = '/api';
 
@@ -41,6 +41,14 @@ export const api = {
     });
     return res.json();
   },
+  updatePatient: async (id: string, patient: Partial<Patient>): Promise<Patient> => {
+    const res = await fetch(`${API_BASE}/patients/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patient),
+    });
+    return res.json();
+  },
 
   // Doctors
   getDoctors: async (): Promise<Doctor[]> => {
@@ -77,6 +85,14 @@ export const api = {
     });
     return res.json();
   },
+  updateVisit: async (id: string, visit: any): Promise<Visit> => {
+    const res = await fetch(`${API_BASE}/visits/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(visit),
+    });
+    return res.json();
+  },
 
   // Appointments
   getAppointments: async (patientId?: string): Promise<Appointment[]> => {
@@ -99,6 +115,9 @@ export const api = {
       body: JSON.stringify({ status, reminderSent }),
     });
     return res.json();
+  },
+  deleteAppointment: async (id: string): Promise<void> => {
+    await fetch(`${API_BASE}/appointments/${id}`, { method: 'DELETE' });
   },
 
   // Reports
@@ -125,5 +144,27 @@ export const api = {
   getAuditLogs: async (): Promise<AuditLog[]> => {
     const res = await fetch(`${API_BASE}/audit-logs`);
     return res.json();
+  },
+
+  // Users
+  getUsers: async (): Promise<User[]> => {
+    const res = await fetch(`${API_BASE}/users`);
+    return res.json();
+  },
+  createUser: async (user: Omit<User, 'id'>): Promise<User> => {
+    const res = await fetch(`${API_BASE}/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(user),
+    });
+    return res.json();
+  },
+  deleteUser: async (id: string): Promise<void> => {
+    await fetch(`${API_BASE}/users/${id}`, { method: 'DELETE' });
+  },
+
+  // Appointment Reminders
+  sendAppointmentReminder: async (id: string): Promise<void> => {
+    await fetch(`${API_BASE}/appointments/${id}/remind`, { method: 'POST' });
   }
 };

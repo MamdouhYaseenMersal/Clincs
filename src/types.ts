@@ -17,6 +17,12 @@ export interface Doctor {
   hybridThreshold?: number;
   hybridExtraRate?: number;
   maxPatientsPerDay?: number;
+  attendance?: Array<{
+    date: string;       // YYYY-MM-DD
+    arrivalTime: string; // HH:mm
+    departureTime: string; // HH:mm
+    hoursWorked: number;
+  }>;
 }
 
 export interface Patient {
@@ -46,6 +52,9 @@ export interface Appointment {
   reminderSent?: boolean;
   isSpecial?: boolean;
   specialPrice?: number;
+  arrivalTime?: string;
+  entryTime?: string;
+  departureTime?: string;
   createdAt: string;
 }
 
@@ -55,6 +64,7 @@ export interface Visit {
   doctorId: string;
   date: string;
   arrivalTime?: string;
+  entryTime?: string;
   departureTime?: string;
   serviceType: string; // بند الحجز
   sendingAdministration?: string; // الإدارة المرسلة
@@ -110,3 +120,18 @@ export interface AuditLog {
   details: string;
   timestamp: string;
 }
+
+export interface Message {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderRole: 'admin' | 'staff' | 'doctor';
+  receiverId?: string; // Optional target specific user
+  receiverRole?: 'doctor' | 'staff' | 'all'; // Target role
+  patientId?: string; // Associated patient ID for case note exchanges
+  patientName?: string; // Associated patient name helper
+  content: string;
+  createdAt: string;
+  isRead?: boolean;
+}
+

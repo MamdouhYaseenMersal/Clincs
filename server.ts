@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import cors from "cors";
+import { GoogleGenAI } from "@google/genai";
 
 // Simple JSON Database setup
 const DB_FILE = "database.json";
@@ -20,6 +21,8 @@ interface Database {
   auditLogs: any[];
   inventory: any[];
   users: any[];
+  messages: any[];
+  rooms?: any[];
 }
 
 const DEFAULT_DB: Database = {
@@ -31,6 +34,13 @@ const DEFAULT_DB: Database = {
   auditLogs: [],
   inventory: [],
   users: [],
+  messages: [],
+  rooms: [
+    { id: "room-1", name: "غرفة الكشف 1 (الباطنة)", status: "available", currentPatientId: null, currentDoctorId: null, startTime: null, endTime: null, durationMinutes: 15 },
+    { id: "room-2", name: "غرفة كشف الأطفال", status: "available", currentPatientId: null, currentDoctorId: null, startTime: null, endTime: null, durationMinutes: 15 },
+    { id: "room-3", name: "غرفة السونار والموجات", status: "available", currentPatientId: null, currentDoctorId: null, startTime: null, endTime: null, durationMinutes: 30 },
+    { id: "room-4", name: "عيادة الرمد والعيون", status: "available", currentPatientId: null, currentDoctorId: null, startTime: null, endTime: null, durationMinutes: 20 }
+  ],
 };
 
 async function readDb(): Promise<Database> {
@@ -46,6 +56,15 @@ async function readDb(): Promise<Database> {
     if (!parsed.auditLogs) parsed.auditLogs = [];
     if (!parsed.inventory) parsed.inventory = [];
     if (!parsed.users) parsed.users = [];
+    if (!parsed.messages) parsed.messages = [];
+    if (!parsed.rooms) {
+      parsed.rooms = [
+        { id: "room-1", name: "غرفة الكشف 1 (الباطنة)", status: "available", currentPatientId: null, currentDoctorId: null, startTime: null, endTime: null, durationMinutes: 15 },
+        { id: "room-2", name: "غرفة كشف الأطفال", status: "available", currentPatientId: null, currentDoctorId: null, startTime: null, endTime: null, durationMinutes: 15 },
+        { id: "room-3", name: "غرفة السونار والموجات", status: "available", currentPatientId: null, currentDoctorId: null, startTime: null, endTime: null, durationMinutes: 30 },
+        { id: "room-4", name: "عيادة الرمد والعيون", status: "available", currentPatientId: null, currentDoctorId: null, startTime: null, endTime: null, durationMinutes: 20 }
+      ];
+    }
     return parsed;
   } catch (err) {
     console.error("Error reading DB", err);
@@ -57,7 +76,7 @@ async function writeDb(db: Database) {
   await fs.writeFile(DB_FILE, JSON.stringify(db, null, 2));
 }
 
-async function logAction(db: Database, action: string, entityId: string, entityType: string, details: string, userId?: string) {
+async function logAction(db: Database, action: string, entityId: string, entityType: string, details: string, userId?: string, payload?: any) {
   const log = {
     id: uuidv4(),
     action,
@@ -65,6 +84,7 @@ async function logAction(db: Database, action: string, entityId: string, entityT
     entityType,
     details,
     userId,
+    payload,
     timestamp: new Date().toISOString()
   };
   db.auditLogs.push(log);
@@ -129,10 +149,159 @@ async function startServer() {
 
   // API Routes
   
+  // Localized clinical parser for fallback diagnoses
+  function getFallbackDiagnoses(complaint: string, specialty?: string) {
+    const norm = (complaint || "").toLowerCase();
+    const res: { diagnosis: string, advice: string }[] = [];
+
+    if (norm.includes("صداع") || norm.includes("رأس") || norm.includes("headache")) {
+      res.push({ diagnosis: "صداع توتري (Tension Headache)", advice: "شرب كميات كافية من الماء، وتجنب الإجهاد البصري وأخذ قسط من الراحة والاسترخاء." });
+      res.push({ diagnosis: "صداع نصفي (Migraine)", advice: "الاستلقاء في مكان مظلم وهادئ وتجنب المنبهات والكافيين والتوتر." });
+      res.push({ diagnosis: "ارتفاع ضغط الدم المؤقت", advice: "قياس تكراري لضغط الدم للوقوف على أسبابه والحد من الأغذية المالحة والغنية بالصوديوم." });
+    } else if (norm.includes("ألم") || norm.includes("بطن") || norm.includes("مغص") || norm.includes("abdomen") || norm.includes("stomach") || norm.includes("معد")) {
+      res.push({ diagnosis: "نزلة معوية حادة (Gastroenteritis)", advice: "الإكثار من السوائل المانعة للجفاف، وتناول وجبات نشوية مسلوقة متباعدة." });
+      res.push({ diagnosis: "عسر الهضم وتشنج القولون (IBS)", advice: "الابتعاد التام عن الأطعمة الدسمة، الحارة، والمسبكة، والحفاظ على وجبات صحية خفيفة." });
+      res.push({ diagnosis: "التهاب جدار المعدة وطفيليات حادة", advice: "تجنب حموضة المعدة بالابتعاد عن شرب الشاي والقهوة على الريق ومراجعة الطبيب الفورية." });
+    } else if (norm.includes("كحة") || norm.includes("صدر") || norm.includes("سعال") || norm.includes("cough")) {
+      res.push({ diagnosis: "التهاب الشعب الهوائية البسيط (Bronchitis)", advice: "تناول المشروبات الدافئة المهدئة، واستنشاق البخار النظيف لتفتيح الشعب الهوائية." });
+      res.push({ diagnosis: "حساسية ربوية مزمنة أو مؤقتة", advice: "تجنب التعرض المباشر للأتربة، العطور القوية، الحيوانات الأليفة، والتدخين السلبي." });
+      res.push({ diagnosis: "نزلات البرد والتهابات الجهاز التنفسي العلوي", advice: "الراحة الكاملة، واستخدام دافئ للمظاهر العلاجية البسيطة والطب البديل." });
+    } else if (norm.includes("سخونية") || norm.includes("حرارة") || norm.includes("fever") || norm.includes("سخونة") || norm.includes("حرار")) {
+      res.push({ diagnosis: "احتقان أو التهاب اللوزتين الحاد (Tonsillitis)", advice: "الغرغرة بماء وملح فاتر، مع أخذ مخفف حرارة تحت طبي وطبيعي بانتظام." });
+      res.push({ diagnosis: "حمى فيروسية عابرة أو التهاب ناتج عن برد", advice: "عمل كمادات ماء فاتر باستمرار ورفع منسوب المياه لتعويض المفقود بالتعرق." });
+    } else if (norm.includes("أذن") || norm.includes("سمع") || norm.includes("ear")) {
+      res.push({ diagnosis: "التهاب الأذن الخارجية أو الوسطى المستجد", advice: "الحفاظ التام على جفاف تجويف الأذن، والامتناع التام عن استخدام أعواد القطن." });
+      res.push({ diagnosis: "انسداد شمعي متراكم (Wax Impaction)", advice: "زيارة عيادة أنف وأذن لغسيل أذن طبي آمن أو تفتيت الشمع بالقطرات الخاصة." });
+    } else if (norm.includes("جلد") || norm.includes("حكة") || norm.includes("طفح") || norm.includes("skin")) {
+      res.push({ diagnosis: "حساسية الجلد التلامسية (Contact Dermatitis)", advice: "تجنب المواد الكيماوية والصابون العطري، واستخدام مرطبات مهدئة خالية من العطور." });
+      res.push({ diagnosis: "إكزيما خفيفة أو طفح حراري بسيط", advice: "ترطيب مستمر، وارتداء ملابس قطنية فضفاضة لتقليل الاحتكاك." });
+    } else {
+      let generalDiagnosis = "زيارة متابعة لفحص الأعراض العامة";
+      if (specialty === "باطنه" || specialty === "باطنة") generalDiagnosis = "عسر هضم طفيف ونزلة برد مستقرة";
+      if (specialty === "أطفال") generalDiagnosis = "برد طفولي عابر أو التهاب بسيط في الحلق";
+      if (specialty === "نساء وتوليد") generalDiagnosis = "إجهاد عام يستدعي متابعة السوائل والفيتامينات";
+      if (specialty === "عظام") generalDiagnosis = "شد عضلي خفيف أو التواء بأحد الأربطة";
+      
+      res.push({ diagnosis: generalDiagnosis, advice: "المتابعة والمراقبة الدورية لدرجات الحرارة والضغط وإعطاء راحة تامة للمريض." });
+      res.push({ diagnosis: "إجهاد وتعب بدني عام (General Fatigue)", advice: "أخذ قسط وافر من النوم لا يقل عن 8 ساعات، ومحاولة تحسين المنظومة الغذائية." });
+    }
+    return res.slice(0, 3);
+  }
+
+  // AI-Powered Diagnosis Suggestions route
+  app.post("/api/suggest-diagnosis", async (req, res) => {
+    const { complaint, doctorSpecialty } = req.body;
+    if (!complaint || complaint.trim().length === 0) {
+      return res.json({ suggestions: [] });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      const fallback = getFallbackDiagnoses(complaint, doctorSpecialty);
+      return res.json({ suggestions: fallback, isFallback: true });
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey: apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const prompt = `أنت طبيب استشاري مساعد ذكي في عيادة طبية متكاملة.
+بناءً على شكوى المريض المذكورة:
+"${complaint}"
+علماً بأن تخصص الطبيب المعالج للزيارة الحالية هو: "${doctorSpecialty || 'ممارس عام'}"
+
+اقترح 3 تشخيصات طبية محتملة ممتازة ومطابقة باللغة العربية مع إرشادات فحص أو نصيحة طبية قصيرة جداً (موجزة بحدود جملة واحدة) لكل تشخيص.
+أرجع النتيجة بصيغة مصفوفة JSON صالحة مباشرة (Valid JSON Array) دون تفسير أو تمهيد، مستخدماً الهيكل التالي تماماً:
+[
+  {
+    "diagnosis": "اسم التشخيص المقترح باللغة العربية مع المصطلح الإنجليزي",
+    "advice": "النصيحة الطبية أو الفحص الموصى به"
+  }
+]
+تنبيه هام ومشدد: لا ترسل أي كلمات تمهيدية أو ذيول قبل أو بعد الـ JSON. أرسل مصفوفة الـ JSON مباشرة فقط ليستطيع الكود قراءتها بنجاح.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        }
+      });
+
+      const text = response.text || "[]";
+      try {
+        const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
+        const parsed = JSON.parse(cleanText);
+        return res.json({ suggestions: parsed });
+      } catch (innerErr) {
+        console.error("JSON parsing of diagnosis failed: ", text);
+        const fallback = getFallbackDiagnoses(complaint, doctorSpecialty);
+        return res.json({ suggestions: fallback, isFallback: true });
+      }
+    } catch (err: any) {
+      console.error("Gemini suggestion error:", err);
+      const fallback = getFallbackDiagnoses(complaint, doctorSpecialty);
+      res.json({ suggestions: fallback, isFallback: true, error: err.message });
+    }
+  });
+
+  // Backup Full DB
+  app.get("/api/backup", async (req, res) => {
+    try {
+      const db = await readDb();
+      res.json(db);
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to read database backup" });
+    }
+  });
+
   // Audit Logs
   app.get("/api/audit-logs", async (req, res) => {
     const db = await readDb();
     res.json(db.auditLogs.slice().reverse());
+  });
+
+  app.post("/api/audit-logs/:id/restore", async (req, res) => {
+    const db = await readDb();
+    const logIndex = db.auditLogs.findIndex(l => l.id === req.params.id);
+    if (logIndex === -1) {
+      return res.status(404).json({ error: "Audit log not found" });
+    }
+    const log = db.auditLogs[logIndex];
+    if (log.action !== "DELETE" || !log.payload) {
+      return res.status(400).json({ error: "This operation cannot be restored or holds no data" });
+    }
+
+    const { entityId, entityType, payload } = log;
+
+    if (entityType === "patient") {
+      const exists = db.patients.some(p => p.id === entityId);
+      if (!exists) {
+        db.patients.push(payload);
+        await logAction(db, "CREATE", entityId, "patient", `استعادة بيانات المريض بنجاح: ${payload.name} من سجل العمليات`);
+      } else {
+        return res.status(400).json({ error: "المريض موجود بالفعل في قاعدة البيانات حالياً" });
+      }
+    } else if (entityType === "appointment") {
+      const exists = db.appointments.some(a => a.id === entityId);
+      if (!exists) {
+        db.appointments.push(payload);
+        await logAction(db, "CREATE", entityId, "appointment", `استعادة موعد المريض #${payload.patientId} الملغي/المحذوف من سجل العمليات`);
+      } else {
+        return res.status(400).json({ error: "الموعد موجود بالفعل في قاعدة البيانات حالياً" });
+      }
+    } else {
+      return res.status(400).json({ error: "لا يمكن استعادة بيانات هذا الجدول حالياً" });
+    }
+
+    await writeDb(db);
+    res.json({ success: true, message: "تمت استعادة الحالة بنجاح" });
   });
 
   // Users
@@ -207,6 +376,140 @@ async function startServer() {
     }
   });
 
+  app.post("/api/inventory/dispense", async (req, res) => {
+    const { items } = req.body; // array of { id: string, quantity: number }
+    if (!items || !Array.isArray(items)) {
+      return res.status(400).json({ error: "Invalid items array" });
+    }
+    const db = await readDb();
+    const dispensedDetails: string[] = [];
+
+    for (const order of items) {
+      const itemIndex = db.inventory.findIndex(i => i.id === order.id);
+      if (itemIndex !== -1) {
+        const oldQty = db.inventory[itemIndex].quantity;
+        const qtyToDeduct = Number(order.quantity || 1);
+        const newQty = Math.max(0, oldQty - qtyToDeduct);
+        db.inventory[itemIndex].quantity = newQty;
+        db.inventory[itemIndex].lastUpdated = new Date().toISOString();
+        dispensedDetails.push(`صرف ${qtyToDeduct} ${db.inventory[itemIndex].unit} من ${db.inventory[itemIndex].name} (المتبقي: ${newQty})`);
+      }
+    }
+
+    if (dispensedDetails.length > 0) {
+      await logAction(db, "UPDATE", "inventory-dispense", "inventory", `صرف أدوية الروشتة في العيادة: ${dispensedDetails.join("، ")}`);
+      await writeDb(db);
+    }
+    res.json({ success: true, inventory: db.inventory });
+  });
+
+  // Room Management Endpoints
+  app.get("/api/rooms", async (req, res) => {
+    const db = await readDb();
+    res.json(db.rooms || []);
+  });
+
+  app.post("/api/rooms", async (req, res) => {
+    const db = await readDb();
+    const newRoom = {
+      id: uuidv4(),
+      name: req.body.name,
+      status: req.body.status || "available",
+      currentPatientId: req.body.currentPatientId || null,
+      currentDoctorId: req.body.currentDoctorId || null,
+      startTime: req.body.startTime || null,
+      endTime: req.body.endTime || null,
+      durationMinutes: Number(req.body.durationMinutes || 15)
+    };
+    if (!db.rooms) db.rooms = [];
+    db.rooms.push(newRoom);
+    await logAction(db, "CREATE", newRoom.id, "room", `إضافة غرفة عيادة جديدة: ${newRoom.name}`);
+    await writeDb(db);
+    res.status(201).json(newRoom);
+  });
+
+  app.patch("/api/rooms/:id", async (req, res) => {
+    const db = await readDb();
+    if (!db.rooms) db.rooms = [];
+    const index = db.rooms.findIndex(r => r.id === req.params.id);
+    if (index !== -1) {
+      db.rooms[index] = { ...db.rooms[index], ...req.body };
+      await logAction(db, "UPDATE", req.params.id, "room", `تعديل بيانات الغرفة: ${db.rooms[index].name}`);
+      await writeDb(db);
+      res.json(db.rooms[index]);
+    } else {
+      res.status(404).json({ error: "Room not found" });
+    }
+  });
+
+  app.delete("/api/rooms/:id", async (req, res) => {
+    const db = await readDb();
+    if (!db.rooms) db.rooms = [];
+    const index = db.rooms.findIndex(r => r.id === req.params.id);
+    if (index !== -1) {
+      const roomName = db.rooms[index].name;
+      db.rooms.splice(index, 1);
+      await logAction(db, "DELETE", req.params.id, "room", `حذف غرفة العيادة: ${roomName}`);
+      await writeDb(db);
+      res.sendStatus(200);
+    } else {
+      res.status(404).json({ error: "Room not found" });
+    }
+  });
+
+  app.post("/api/rooms/:id/start-exam", async (req, res) => {
+    const db = await readDb();
+    if (!db.rooms) db.rooms = [];
+    const index = db.rooms.findIndex(r => r.id === req.params.id);
+    if (index !== -1) {
+      const { patientId, doctorId, durationMinutes } = req.body;
+      const parsedDuration = Number(durationMinutes || db.rooms[index].durationMinutes || 15);
+      
+      const startTime = new Date();
+      const endTime = new Date(startTime.getTime() + parsedDuration * 60 * 1000);
+
+      db.rooms[index].status = "occupied";
+      db.rooms[index].currentPatientId = patientId;
+      db.rooms[index].currentDoctorId = doctorId;
+      db.rooms[index].startTime = startTime.toISOString();
+      db.rooms[index].endTime = endTime.toISOString();
+      db.rooms[index].durationMinutes = parsedDuration;
+
+      const patient = db.patients.find(p => p.id === patientId);
+      const doctor = db.doctors.find(d => d.id === doctorId);
+      const details = `بدء فحص طبي وتسكين الغرفة (${db.rooms[index].name}) للمريض ${patient?.name || 'بدون اسم'} مع الدكتور ${doctor?.name || 'بدون اسم'}`;
+
+      await logAction(db, "UPDATE", req.params.id, "room", details);
+      await writeDb(db);
+      res.json(db.rooms[index]);
+    } else {
+      res.status(404).json({ error: "Room not found" });
+    }
+  });
+
+  app.post("/api/rooms/:id/end-exam", async (req, res) => {
+    const db = await readDb();
+    if (!db.rooms) db.rooms = [];
+    const index = db.rooms.findIndex(r => r.id === req.params.id);
+    if (index !== -1) {
+      const oldRoomInfo = db.rooms[index];
+      const patient = db.patients.find(p => p.id === oldRoomInfo.currentPatientId);
+      const details = `إنهاء الكشف وفحص الغرفة وإخلائها (${oldRoomInfo.name}) للمريض ${patient?.name || 'مريض سابق'}`;
+
+      db.rooms[index].status = "available";
+      db.rooms[index].currentPatientId = null;
+      db.rooms[index].currentDoctorId = null;
+      db.rooms[index].startTime = null;
+      db.rooms[index].endTime = null;
+
+      await logAction(db, "UPDATE", req.params.id, "room", details);
+      await writeDb(db);
+      res.json(db.rooms[index]);
+    } else {
+      res.status(404).json({ error: "Room not found" });
+    }
+  });
+
   // Patients
   app.get("/api/patients", async (req, res) => {
     const db = await readDb();
@@ -229,6 +532,20 @@ async function startServer() {
       await logAction(db, "UPDATE", req.params.id, "patient", `Updated patient data for: ${db.patients[index].name}`);
       await writeDb(db);
       res.json(db.patients[index]);
+    } else {
+      res.status(404).json({ error: "Patient not found" });
+    }
+  });
+
+  app.delete("/api/patients/:id", async (req, res) => {
+    const db = await readDb();
+    const index = db.patients.findIndex(p => p.id === req.params.id);
+    if (index !== -1) {
+      const patient = db.patients[index];
+      db.patients.splice(index, 1);
+      await logAction(db, "DELETE", req.params.id, "patient", `حذف بيانات المريض: ${patient.name} (كود الحساب: ${patient.caseCode || 'بدون'})`, undefined, patient);
+      await writeDb(db);
+      res.sendStatus(200);
     } else {
       res.status(404).json({ error: "Patient not found" });
     }
@@ -294,8 +611,7 @@ async function startServer() {
     const index = db.appointments.findIndex(a => a.id === req.params.id);
     if (index !== -1) {
       const oldStatus = db.appointments[index].status;
-      if (req.body.status) db.appointments[index].status = req.body.status;
-      if (req.body.reminderSent !== undefined) db.appointments[index].reminderSent = req.body.reminderSent;
+      db.appointments[index] = { ...db.appointments[index], ...req.body };
       
       if (req.body.status && req.body.status !== oldStatus) {
         await logAction(db, "UPDATE", req.params.id, "appointment", `Changed appointment status to ${req.body.status}`);
@@ -313,8 +629,18 @@ async function startServer() {
     const index = db.appointments.findIndex(a => a.id === req.params.id);
     if (index !== -1) {
       const appointment = db.appointments[index];
+      const patient = db.patients.find(p => p.id === appointment.patientId);
+      const patientNameMsg = patient ? `للمريض ${patient.name}` : `(رقم المريض: ${appointment.patientId})`;
       db.appointments.splice(index, 1);
-      await logAction(db, "DELETE", req.params.id, "appointment", `Deleted appointment for tomorrow/future`);
+      await logAction(
+        db, 
+        "DELETE", 
+        req.params.id, 
+        "appointment", 
+        `حذف الموعد مقرر العمل به بتاريخ ${appointment.date} ${patientNameMsg}`, 
+        undefined, 
+        appointment
+      );
       await writeDb(db);
       res.sendStatus(200);
     } else {
@@ -414,6 +740,57 @@ async function startServer() {
     const db = await readDb();
     const reports = db.reports.filter(r => r.patientId === req.params.patientId);
     res.json(reports);
+  });
+
+  // Internal Messaging System Endpoints
+  app.get("/api/messages", async (req, res) => {
+    const db = await readDb();
+    res.json(db.messages || []);
+  });
+
+  app.post("/api/messages", async (req, res) => {
+    const db = await readDb();
+    const newMessage = {
+      id: uuidv4(),
+      senderId: req.body.senderId,
+      senderName: req.body.senderName,
+      senderRole: req.body.senderRole,
+      receiverId: req.body.receiverId || null,
+      receiverRole: req.body.receiverRole || 'all',
+      patientId: req.body.patientId || null,
+      patientName: req.body.patientName || null,
+      content: req.body.content,
+      createdAt: new Date().toISOString(),
+      isRead: false
+    };
+    db.messages.push(newMessage);
+    await logAction(db, "CREATE", newMessage.id, "patient", `Internal Message sent by ${req.body.senderName}: ${req.body.content.substring(0, 30)}...`);
+    await writeDb(db);
+    res.status(201).json(newMessage);
+  });
+
+  app.patch("/api/messages/:id/read", async (req, res) => {
+    const db = await readDb();
+    const index = db.messages.findIndex(m => m.id === req.params.id);
+    if (index !== -1) {
+      db.messages[index].isRead = true;
+      await writeDb(db);
+      res.json(db.messages[index]);
+    } else {
+      res.status(404).json({ error: "Message not found" });
+    }
+  });
+
+  app.delete("/api/messages/:id", async (req, res) => {
+    const db = await readDb();
+    const index = db.messages.findIndex(m => m.id === req.params.id);
+    if (index !== -1) {
+      db.messages.splice(index, 1);
+      await writeDb(db);
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: "Message not found" });
+    }
   });
 
   // Serve uploaded files

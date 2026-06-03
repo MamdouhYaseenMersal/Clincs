@@ -7896,7 +7896,7 @@ function ImportAppointmentsExcelModal({ onClose, doctors, patients, onComplete }
   );
 }
 
-function RoomsView({ patients, doctors }: { patients: Patient[], doctors: Doctor[] }) {
+function RoomsView({ patients, doctors }: { patients: Patient[], doctors: Doctor[], key?: string }) {
   const [rooms, setRooms] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   

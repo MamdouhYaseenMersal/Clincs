@@ -115,7 +115,7 @@ export interface AuditLog {
   id: string;
   action: string;
   entityId: string;
-  entityType: 'doctor' | 'patient' | 'appointment' | 'visit' | 'report';
+  entityType: string;
   userId?: string;
   details: string;
   timestamp: string;

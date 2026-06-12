@@ -2,14 +2,38 @@ import { Patient, Doctor, Visit, Report, Appointment, AuditLog, InventoryItem, U
 
 const API_BASE = '/api';
 
+const fetchWithUser = async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const userStr = localStorage.getItem('currentUser');
+  const headers: Record<string, string> = {};
+  if (userStr) {
+    try {
+      const user = JSON.parse(userStr);
+      if (user && user.name) {
+        headers['x-user-id'] = encodeURIComponent(user.name);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  const initHeaders = init?.headers || {};
+  return fetch(url, {
+    ...init,
+    headers: {
+      ...initHeaders,
+      ...headers,
+    } as any,
+  });
+};
+
 export const api = {
   // Inventory
   getInventory: async (): Promise<InventoryItem[]> => {
-    const res = await fetch(`${API_BASE}/inventory`);
+    const res = await fetchWithUser(`${API_BASE}/inventory`);
     return res.json();
   },
   addInventoryItem: async (item: Omit<InventoryItem, 'id' | 'lastUpdated'>): Promise<InventoryItem> => {
-    const res = await fetch(`${API_BASE}/inventory`, {
+    const res = await fetchWithUser(`${API_BASE}/inventory`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item),
@@ -17,7 +41,7 @@ export const api = {
     return res.json();
   },
   updateInventoryItem: async (id: string, item: Partial<InventoryItem>): Promise<InventoryItem> => {
-    const res = await fetch(`${API_BASE}/inventory/${id}`, {
+    const res = await fetchWithUser(`${API_BASE}/inventory/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item),
@@ -25,16 +49,16 @@ export const api = {
     return res.json();
   },
   deleteInventoryItem: async (id: string): Promise<void> => {
-    await fetch(`${API_BASE}/inventory/${id}`, { method: 'DELETE' });
+    await fetchWithUser(`${API_BASE}/inventory/${id}`, { method: 'DELETE' });
   },
 
   // Patients
   getPatients: async (): Promise<Patient[]> => {
-    const res = await fetch(`${API_BASE}/patients`);
+    const res = await fetchWithUser(`${API_BASE}/patients`);
     return res.json();
   },
   createPatient: async (patient: Omit<Patient, 'id' | 'createdAt'>): Promise<Patient> => {
-    const res = await fetch(`${API_BASE}/patients`, {
+    const res = await fetchWithUser(`${API_BASE}/patients`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patient),
@@ -42,7 +66,7 @@ export const api = {
     return res.json();
   },
   updatePatient: async (id: string, patient: Partial<Patient>): Promise<Patient> => {
-    const res = await fetch(`${API_BASE}/patients/${id}`, {
+    const res = await fetchWithUser(`${API_BASE}/patients/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patient),
@@ -52,11 +76,11 @@ export const api = {
 
   // Doctors
   getDoctors: async (): Promise<Doctor[]> => {
-    const res = await fetch(`${API_BASE}/doctors`);
+    const res = await fetchWithUser(`${API_BASE}/doctors`);
     return res.json();
   },
   createDoctor: async (doctor: Omit<Doctor, 'id'>): Promise<Doctor> => {
-    const res = await fetch(`${API_BASE}/doctors`, {
+    const res = await fetchWithUser(`${API_BASE}/doctors`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(doctor),
@@ -64,7 +88,7 @@ export const api = {
     return res.json();
   },
   updateDoctor: async (id: string, doctor: Partial<Doctor>): Promise<Doctor> => {
-    const res = await fetch(`${API_BASE}/doctors/${id}`, {
+    const res = await fetchWithUser(`${API_BASE}/doctors/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(doctor),
@@ -74,11 +98,11 @@ export const api = {
 
   // Visits
   getVisits: async (): Promise<Visit[]> => {
-    const res = await fetch(`${API_BASE}/visits`);
+    const res = await fetchWithUser(`${API_BASE}/visits`);
     return res.json();
   },
   createVisit: async (visit: any): Promise<Visit> => {
-    const res = await fetch(`${API_BASE}/visits`, {
+    const res = await fetchWithUser(`${API_BASE}/visits`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(visit),
@@ -86,7 +110,7 @@ export const api = {
     return res.json();
   },
   updateVisit: async (id: string, visit: any): Promise<Visit> => {
-    const res = await fetch(`${API_BASE}/visits/${id}`, {
+    const res = await fetchWithUser(`${API_BASE}/visits/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(visit),
@@ -97,11 +121,11 @@ export const api = {
   // Appointments
   getAppointments: async (patientId?: string): Promise<Appointment[]> => {
     const url = patientId ? `${API_BASE}/appointments/${patientId}` : `${API_BASE}/appointments`;
-    const res = await fetch(url);
+    const res = await fetchWithUser(url);
     return res.json();
   },
   createAppointment: async (appointment: Omit<Appointment, 'id' | 'createdAt'> & { status?: Appointment['status'] }): Promise<Appointment> => {
-    const res = await fetch(`${API_BASE}/appointments`, {
+    const res = await fetchWithUser(`${API_BASE}/appointments`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(appointment),
@@ -112,7 +136,7 @@ export const api = {
     const body = typeof statusOrPartial === 'string' 
       ? { status: statusOrPartial, reminderSent } 
       : statusOrPartial;
-    const res = await fetch(`${API_BASE}/appointments/${id}`, {
+    const res = await fetchWithUser(`${API_BASE}/appointments/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -120,12 +144,12 @@ export const api = {
     return res.json();
   },
   deleteAppointment: async (id: string): Promise<void> => {
-    await fetch(`${API_BASE}/appointments/${id}`, { method: 'DELETE' });
+    await fetchWithUser(`${API_BASE}/appointments/${id}`, { method: 'DELETE' });
   },
 
   // Reports
   getReports: async (patientId: string): Promise<Report[]> => {
-    const res = await fetch(`${API_BASE}/reports/${patientId}`);
+    const res = await fetchWithUser(`${API_BASE}/reports/${patientId}`);
     return res.json();
   },
   uploadReport: async (patientId: string, file: File, title: string, type: string, visitId?: string): Promise<Report> => {
@@ -136,7 +160,7 @@ export const api = {
     formData.append('type', type);
     if (visitId) formData.append('visitId', visitId);
 
-    const res = await fetch(`${API_BASE}/upload`, {
+    const res = await fetchWithUser(`${API_BASE}/upload`, {
       method: 'POST',
       body: formData,
     });
@@ -145,17 +169,17 @@ export const api = {
 
   // Audit Logs
   getAuditLogs: async (): Promise<AuditLog[]> => {
-    const res = await fetch(`${API_BASE}/audit-logs`);
+    const res = await fetchWithUser(`${API_BASE}/audit-logs`);
     return res.json();
   },
 
   // Users
   getUsers: async (): Promise<User[]> => {
-    const res = await fetch(`${API_BASE}/users`);
+    const res = await fetchWithUser(`${API_BASE}/users`);
     return res.json();
   },
   createUser: async (user: Omit<User, 'id'>): Promise<User> => {
-    const res = await fetch(`${API_BASE}/users`, {
+    const res = await fetchWithUser(`${API_BASE}/users`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(user),
@@ -163,26 +187,26 @@ export const api = {
     return res.json();
   },
   deleteUser: async (id: string): Promise<void> => {
-    await fetch(`${API_BASE}/users/${id}`, { method: 'DELETE' });
+    await fetchWithUser(`${API_BASE}/users/${id}`, { method: 'DELETE' });
   },
 
   getBackup: async (): Promise<any> => {
-    const res = await fetch(`${API_BASE}/backup`);
+    const res = await fetchWithUser(`${API_BASE}/backup`);
     return res.json();
   },
 
   // Appointment Reminders
   sendAppointmentReminder: async (id: string): Promise<void> => {
-    await fetch(`${API_BASE}/appointments/${id}/remind`, { method: 'POST' });
+    await fetchWithUser(`${API_BASE}/appointments/${id}/remind`, { method: 'POST' });
   },
 
   // Internal Messaging System
   getMessages: async (): Promise<Message[]> => {
-    const res = await fetch(`${API_BASE}/messages`);
+    const res = await fetchWithUser(`${API_BASE}/messages`);
     return res.json();
   },
   sendMessage: async (msg: Omit<Message, 'id' | 'createdAt' | 'isRead'>): Promise<Message> => {
-    const res = await fetch(`${API_BASE}/messages`, {
+    const res = await fetchWithUser(`${API_BASE}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(msg),
@@ -190,18 +214,18 @@ export const api = {
     return res.json();
   },
   markMessageAsRead: async (id: string): Promise<Message> => {
-    const res = await fetch(`${API_BASE}/messages/${id}/read`, {
+    const res = await fetchWithUser(`${API_BASE}/messages/${id}/read`, {
       method: 'PATCH',
     });
     return res.json();
   },
   deleteMessage: async (id: string): Promise<void> => {
-    await fetch(`${API_BASE}/messages/${id}`, { method: 'DELETE' });
+    await fetchWithUser(`${API_BASE}/messages/${id}`, { method: 'DELETE' });
   },
 
   // State Restoration
   restoreState: async (logId: string): Promise<any> => {
-    const res = await fetch(`${API_BASE}/audit-logs/${logId}/restore`, {
+    const res = await fetchWithUser(`${API_BASE}/audit-logs/${logId}/restore`, {
       method: "POST",
     });
     if (!res.ok) {
@@ -213,7 +237,7 @@ export const api = {
 
   // Prescription Auto-Deduction
   dispensePrescription: async (items: { id: string; quantity: number }[]): Promise<any> => {
-    const res = await fetch(`${API_BASE}/inventory/dispense`, {
+    const res = await fetchWithUser(`${API_BASE}/inventory/dispense`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items }),
@@ -227,7 +251,7 @@ export const api = {
 
   // Patients Extension
   deletePatient: async (id: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/patients/${id}`, { method: 'DELETE' });
+    const res = await fetchWithUser(`${API_BASE}/patients/${id}`, { method: 'DELETE' });
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error || "فشل حذف المريض");
@@ -236,11 +260,11 @@ export const api = {
 
   // Room Management
   getRooms: async (): Promise<any[]> => {
-    const res = await fetch(`${API_BASE}/rooms`);
+    const res = await fetchWithUser(`${API_BASE}/rooms`);
     return res.json();
   },
   createRoom: async (room: any): Promise<any> => {
-    const res = await fetch(`${API_BASE}/rooms`, {
+    const res = await fetchWithUser(`${API_BASE}/rooms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(room),
@@ -248,7 +272,7 @@ export const api = {
     return res.json();
   },
   updateRoom: async (id: string, room: any): Promise<any> => {
-    const res = await fetch(`${API_BASE}/rooms/${id}`, {
+    const res = await fetchWithUser(`${API_BASE}/rooms/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(room),
@@ -256,14 +280,14 @@ export const api = {
     return res.json();
   },
   deleteRoom: async (id: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/rooms/${id}`, { method: 'DELETE' });
+    const res = await fetchWithUser(`${API_BASE}/rooms/${id}`, { method: 'DELETE' });
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error || "فشل حذف الغرفة");
     }
   },
   startRoomExam: async (id: string, body: { patientId: string, doctorId: string, durationMinutes: number }): Promise<any> => {
-    const res = await fetch(`${API_BASE}/rooms/${id}/start-exam`, {
+    const res = await fetchWithUser(`${API_BASE}/rooms/${id}/start-exam`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -271,8 +295,25 @@ export const api = {
     return res.json();
   },
   endRoomExam: async (id: string): Promise<any> => {
-    const res = await fetch(`${API_BASE}/rooms/${id}/end-exam`, {
+    const res = await fetchWithUser(`${API_BASE}/rooms/${id}/end-exam`, {
       method: 'POST',
+    });
+    return res.json();
+  },
+
+  // Customized Periodic Reports Insights
+  generateReportInsights: async (reportTitle: string, startDate: string, endDate: string, metrics: {
+    totalRevenue: number;
+    totalClinicProfit: number;
+    totalCompletedVisits: number;
+    topDoctor: string;
+    topDiagnosis: string;
+    criticalInventoryCount: number;
+  }): Promise<{ insights: string, isFallback?: boolean }> => {
+    const res = await fetchWithUser(`${API_BASE}/generate-report-insights`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reportTitle, startDate, endDate, metrics }),
     });
     return res.json();
   }

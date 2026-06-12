@@ -7,6 +7,9 @@ import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import cors from "cors";
 import { GoogleGenAI } from "@google/genai";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const requestStore = new AsyncLocalStorage<{ userId?: string }>();
 
 // Simple JSON Database setup
 const DB_FILE = "database.json";
@@ -77,14 +80,53 @@ async function writeDb(db: Database) {
 }
 
 async function logAction(db: Database, action: string, entityId: string, entityType: string, details: string, userId?: string, payload?: any) {
+  const store = requestStore.getStore();
+  const activeUserId = userId || store?.userId || "نظام تلقائي";
+  
+  let branch = payload?.branch || undefined;
+  if (!branch) {
+    if (entityType === "patient") {
+      const p = db.patients?.find(x => x.id === entityId);
+      if (p) branch = p.branch;
+    } else if (entityType === "doctor") {
+      const d = db.doctors?.find(x => x.id === entityId);
+      if (d) branch = d.branch;
+    } else if (entityType === "appointment") {
+      const a = db.appointments?.find(x => x.id === entityId);
+      if (a) {
+        branch = a.branch;
+        if (!branch) {
+          const p = db.patients?.find(x => x.id === a.patientId);
+          if (p) branch = p.branch;
+        }
+      }
+    } else if (entityType === "visit") {
+      const v = db.visits?.find(x => x.id === entityId);
+      if (v) {
+        branch = v.branch;
+        if (!branch) {
+          const p = db.patients?.find(x => x.id === v.patientId);
+          if (p) branch = p.branch;
+        }
+      }
+    } else if (entityType === "room") {
+      const r = db.rooms?.find(x => x.id === entityId);
+      if (r) branch = r.branch;
+    } else if (entityType === "inventory") {
+      const i = db.inventory?.find(x => x.id === entityId);
+      if (i) branch = i.branch;
+    }
+  }
+
   const log = {
     id: uuidv4(),
     action,
     entityId,
     entityType,
     details,
-    userId,
+    userId: activeUserId,
     payload,
+    branch,
     timestamp: new Date().toISOString()
   };
   db.auditLogs.push(log);
@@ -146,6 +188,20 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
   app.use(cors());
+
+  // Intercept request user identifier and run request in AsyncLocalStorage
+  app.use((req, res, next) => {
+    const userIdHeader = req.headers['x-user-id'];
+    let userId: string | undefined = undefined;
+    if (typeof userIdHeader === 'string') {
+      try {
+        userId = decodeURIComponent(userIdHeader);
+      } catch (e) {
+        userId = userIdHeader;
+      }
+    }
+    requestStore.run({ userId }, next);
+  });
 
   // API Routes
   
@@ -248,6 +304,223 @@ async function startServer() {
       console.error("Gemini suggestion error:", err);
       const fallback = getFallbackDiagnoses(complaint, doctorSpecialty);
       res.json({ suggestions: fallback, isFallback: true, error: err.message });
+    }
+  });
+
+  // AI-Powered Periodic Report Insights route
+  app.post("/api/generate-report-insights", async (req, res) => {
+    const { reportTitle, startDate, endDate, metrics } = req.body;
+    const { totalRevenue, totalClinicProfit, totalCompletedVisits, topDoctor, topDiagnosis, criticalInventoryCount } = metrics || {};
+
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    // Local dynamic rule-based insights engine as fallback
+    const getFallbackInsights = () => {
+      const insightsList = [
+        `تحليل الفترة من [${startDate}] إلى [${endDate}]: مركز الرعاية سجل أداءً طبياً ممتازاً بإجمالي كشوفات بلغت (${totalCompletedVisits || 0}) كشفاً ناجحاً.`,
+        `التحليل المالي يوضح كفاءة تشغيلية واضحة؛ بلغ إجمالي الإيرادات ج.م (${totalRevenue || 0}) بصافي أرباح عيادة بلغت (${totalClinicProfit || 0}) ج.م.`,
+        `رُصد الدكتور (${topDoctor || 'غير محدد'}) كأعلى طبيب كفاءة وإنتاجية وتسكين للحالات خلال هذه الدورة.`,
+        `التشخيص السريري الأكثر شيوعاً ورصداً هو (${topDiagnosis || 'غير محدد'}). يُنصح بشراء وتأمين مخزون فوري من الأدوية المضادة والمستلزمات المرتبطة به.`,
+        criticalInventoryCount > 0 
+          ? `⚠️ تحذير المخزون: يُرجى العلم بوجود عدد (${criticalInventoryCount}) أصناف من المستلزمات أو الأدوية الحرجة التي تقع تحت مستوى نقطة إعادة الطلب. يُوصى بالشراء الفوري لمنع تعطل كشف المرضى.`
+          : `✅ منظومة الإمداد والمخازن في حالة مستقرة؛ لا توجد أي نواقص طبية حرجة بالعيادة حالياً.`
+      ];
+      return insightsList.join("\n\n");
+    };
+
+    if (!apiKey) {
+      return res.json({ insights: getFallbackInsights(), isFallback: true });
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey: apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const prompt = `أنت خبير استشاري متقدم في الأنظمة الصحية وإدارة العيادات الطبية المشتركة.
+كلفناك بتحليل أداء العيادة للفترة من [${startDate}] إلى [${endDate}] وبناءً على البيانات السريرية والمالية المغذاة التالية:
+- عنوان التقرير الدوري: "${reportTitle || 'تقرير الأداء السريري المالي'}"
+- إجمالي عدد زيارات المرضى المنجزة: ${totalCompletedVisits || 0} حالة
+- إجمالي الإيرادات المالية المحصلة للعيادة: ${totalRevenue || 0} ج.م
+- صافي أرباح العيادة بعد استبعاد مستحقات الأطباء: ${totalClinicProfit || 0} ج.م
+- الطبيب الأكثر إنتاجية فحصاً للحالات: "د. ${topDoctor || 'غير معروف'}"
+- التشخيص والحالة المرضية الأكثر رصداً وانتشاراً بالعيادة: "${topDiagnosis || 'لا يوجد'}"
+- عدد المستلزمات الطبية والأدوية الطارئة في مستوى نقص كلي أو حرج: ${criticalInventoryCount || 0} أصناف
+
+اكتب خلاصة تقرير وتحليل أداء تنفيذي سريري (Executive Analytical Summary) مؤلف من 2 إلى 3 فقرات باللغة العربية بأسلوب راقٍ، مباشر، ومحترف جداً. 
+يجب أن يحتوي التحليل على:
+1. قراءة موضوعية للأرقام المالية والزيارات.
+2. نصيحة طبية أو سريرية للمركز بخصوص المرض الأكثر شيوعاً والتعامل معه.
+3. التوصيات العاجلة بخصوص الأطباء والمخازن (خاصة إذا كان هناك نواقص حرجة).
+
+تنبيه هام ومشدد: أرسل النص العربي للتحليل مباشرة دون أي تمهيدات أو علامات تخفيض (Markdown formatting outside plain text).`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+      });
+
+      const text = response.text || "";
+      return res.json({ insights: text.trim() });
+    } catch (err: any) {
+      console.error("Gemini report insights error:", err);
+      res.json({ insights: getFallbackInsights(), isFallback: true, error: err.message });
+    }
+  });
+
+  // AI Patient Medical File Summary endpoint (Medicolegal Quality Aligned)
+  app.post("/api/patient-file-brief", async (req, res) => {
+    const { patient, visitsHistory } = req.body;
+    if (!patient) return res.status(400).json({ error: "Patient data required." });
+
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    const getFallbackBrief = () => {
+      const vHistory = Array.isArray(visitsHistory) ? visitsHistory : [];
+      let specialtiesSpotted = vHistory.map(v => v.serviceType || "عيادة عامة");
+      if (specialtiesSpotted.length === 0) specialtiesSpotted = ["العيادات الطبية العامة"];
+      const uniqueSpecs = Array.from(new Set(specialtiesSpotted));
+
+      return `**بيان ملخص الملف الطبي الشامل كلي الخصوصية للتخصصات الطبية المتعددة**
+تاريخ المراجعة الآلية: ${new Date().toISOString().slice(0, 10)}
+
+*   **الاسم الكامل للحالة:** ${patient.name} (${patient.gender === 'male' ? 'ذكر' : 'أنثى'} - السن: ${patient.age || 'غير محدد'})
+*   **كود المريض السريري:** ${patient.caseCode || 'غير مسجل'}
+*   **التخصصات الطبية المشمولة بالفحص:** ${uniqueSpecs.join('، ')}
+*   **عدد الزيارات المسجلة بنظام الأرشيف:** ${vHistory.length} زيارة متكاملة.
+
+**الخلاصة التحليلية السريرية السريعة (توصية لوحة الأطباء):**
+تظهر السجلات الطبية أن المريض ${patient.name} يعاني من بعض الأعراض المرتبطة بـ (${vHistory[0]?.diagnosis || 'متابعة دورية'}). 
+الخطة العلاجية المقترحة ومسارات الأدوية قيد المراقبة السريرية تحت رعاية الأقسام الطبية المختصة وسجل الطبيب (${vHistory[0]?.doctorName || 'الطبيب المعالج'}). تظل المؤشرات الحيوية السابقة ضمن النطاق المقبول.
+
+**⚠️ إشعار الجودة والمسؤولية الطبية القانونية (Medicolegal Quality & Professional Disclaimer):**
+هذا المستند عبارة عن مسودة ملخص فوري مولد بمساعدة تقنيات الذكاء الاصطناعي الطبية المساعدة (Decision Support AI). هذا التحليل ليس فحصاً عيادياً مباشراً ولا يعوض القرار الإكلينيكي للطبيب المعالج المرخص. تقع المسؤولية الكاملة في التوجيه الطبي وإقرار التشخيص وتصنيف دواء الحالة وجرعاته العلاجية قانونياً ومهنياً على عاتق الطبيب الاستشاري المشرف حصراً.`;
+    };
+
+    if (!apiKey) {
+      return res.json({ brief: getFallbackBrief(), isFallback: true });
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey: apiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
+
+      const vHistoryText = Array.isArray(visitsHistory) && visitsHistory.length > 0
+        ? visitsHistory.map((v, idx) => `الزيارة رقم [${idx+1}] - التخصص: ${v.serviceType || 'غير محدد'}، الطبيب: د. ${v.doctorName || 'غير محدد'}، الشكوى السريرية: ${v.notes || 'لا يوجد'}، التشخيص المسجل: ${v.diagnosis || 'غير مسجل'}، الأدوية الموصوفة: ${Array.isArray(v.prescriptions) ? v.prescriptions.map((p: any) => p.name).join('، ') : 'لا يوجد'}`).join('\n')
+        : "لا توجد زيارات سابقة مسجلة بتفاصيل كاملة.";
+
+      const prompt = `أنت طبيب استشاري وخبير تدقيق طبي قانوني عالي الكفاءة (Medicolegal Clinical Auditor). 
+مهمتك مراجعة ملف المريض الكامل وصياغة "بطاقة موجزة لملف المريض لكفة التخصصات الطبية" ليطلع عليها الأطباء وهيئة التمريض لسرعة متابعة الحالة.
+
+بيانات المريض الأساسية:
+- الاسم: ${patient.name}
+- الجنس: ${patient.gender}
+- السن: ${patient.age} سنة
+- كود الحالة: ${patient.caseCode}
+
+سجل الزيارات الطبية بالتفصيل:
+${vHistoryText}
+
+اكتب ملخصاً طبياً مهنياً وبليغاً باللغة العربية الفصحى يتضمن:
+1. خلاصة تشخيصية متقاطعة تغطي كافة التخصصات التي زارها المريض.
+2. تتبع الحالة الصحية والدوائية الحالية وأبرز النواحي العلاجية.
+3. التوجيهات أو التنبيهات السريرية الأساسية لطاقم العيادة.
+4. أضف في نهاية النص إشعاراً واضحاً ومشدداً باللغة العربية حول المسؤولية الطبية والقانونية وأنه تقرير مساند استرشادي فقط والقرار النهائي والمسؤولية تقع على الطبيب المعالج المشرف.
+
+تنبيه هام: أرسل النص العربي مباشرة ليعرضه النظام وبأسلوب منسق ومرئي للأطباء.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+      });
+
+      return res.json({ brief: (response.text || "").trim() });
+    } catch (err: any) {
+      console.error("Gemini patient brief error:", err);
+      res.json({ brief: getFallbackBrief(), isFallback: true, error: err.message });
+    }
+  });
+
+  // AI Patient Investigations Gallery Progress Summary endpoint
+  app.post("/api/patient-investigations-brief", async (req, res) => {
+    const { patient, files } = req.body;
+    if (!patient) return res.status(400).json({ error: "Patient data required." });
+
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    const getFallbackProgress = () => {
+      const fileList = Array.isArray(files) ? files : [];
+      if (fileList.length === 0) {
+        return `**تقرير رصد التطور للفحوصات الطبية المرفقة**
+تنبيه: لا توجد فحوصات أو تحاليل طبية مرفوعة حالياً في المعرض الطبي الخاص بهذا المريض لصياغة تقرير التطور البصري المساعد.`;
+      }
+
+      return `**📊 تقرير تحليل تقدم الفحوصات والتحاليل الطبية المخبرية**
+تاريخ استخراج الخلاصة التطورية: ${new Date().toISOString().slice(0, 10)}
+
+*   **اسم المريض وعمر الحالة:** ${patient.name} (${patient.gender === 'male' ? 'ذكر' : 'أنثى'} - السن: ${patient.age || 'غير محدد'})
+*   **الفحوصات والأوراق المرصودة في المعرض المعاين:** 
+    ${fileList.map((f, idx) => `   ${idx+1}. الملف: ${f.title || f.filename} (التاريخ: ${new Date(f.createdAt || Date.now()).toISOString().slice(0, 10)})`).join('\n')}
+
+**📈 خط سیر وتقدم المؤشرات (Clinical Progress Evolution):**
+بمراجعة عناوين وتواريخ التحاليل والأشعات الملحقة بالمعرض، يتبين وجود تطور تدريجي في تتبع الحالة الصحية. تشير التواريخ المتتابعة إلى التزام عالي ببروتوكول المتابعة الدورية المقررة من قبل الإدارة الطبية لتتبع المتغيرات المخبرية.
+
+**توصيات الإدارة السريرية واستشاريي المتابعة:**
+- حث المريض على الالتزام الكامل بمواعيد الفحص للمستوى التالي.
+- مقارنة أحدث مستند من الأشعة الطبية بنتائج السونار المسجلة مسبقاً لمراقبة استجابة الأنسجة.
+  
+**⚠️ تنبيه طبي قانوني:** هذا التحليل مؤتمت للمستندات المرفوعة، والتحقق البصري المباشر وقراءة التقارير هي مسؤولية الإخصائي الاستشاري المشرف بالكامل.`;
+    };
+
+    if (!apiKey) {
+      return res.json({ progress: getFallbackProgress(), isFallback: true });
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey: apiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
+
+      const fileListText = Array.isArray(files) && files.length > 0
+        ? files.map((f, idx) => `الملف رقم [${idx+1}] - العنوان: ${f.title || 'بلأ اسم'}، اسم الملف الأصلي: ${f.filename}، تاريخ الرفع بالملف: ${f.createdAt}`).join('\n')
+        : "لم يتم رفع أي مستندات حتى الآن.";
+
+      const prompt = `أنت طبيب استشاري متخصص في إدارة المتابعة الصحية وقراءة تطور الفحوصات الطبية (Clinician of Radiology and Lab Investigations).
+تلقيت قائمة بالمرفقات الطبية (فحوصات، تحاليل، تذاكر سونار، تقارير مختبرات ومعامل) المرفوعة بمعرض المريض والمحفوظة في ملفه السريري الموحد.
+
+بيانات المريض الأساسية:
+- الاسم: ${patient.name}
+- الجنس: ${patient.gender}
+- السن: ${patient.age} سنة
+
+قائمة الملفات والتحاليل المرفوعة بالمعرض حسب تسلسلها وتاريخها:
+${fileListText}
+
+اكتب باللغة العربية الفصحى تحليلاً "لمنحنى تقدم فحص وتحاليل المريض" (Patient Investigations Progress Brief):
+1. رتب الفحوصات ذهنياً بحسب التسلسل التاريخي واكتب قراءة لتسلسل الفحص الطبي للمريض.
+2. وضح مدى التزام المريض بالمتابعة وصور التطور أو التغير المتوقع في حالته الصحية والسريرية بناءً على الفحوصات المسجلة.
+3. التوصيات الإكلينيكية الفعالة للأطباء لمقارنة البيانات السريرية.
+4. إشعار بجودة وتعهد طبي قانوني ومحدد يُذكّر بأن تفسير الأشعة والتحاليل النهائي والتشخيص القانوني يعود لأطباء الأشعة والمختبر والأخصائي المعالج.
+
+أرسل النص مباشرة بأسلوب منظم جداً ومجزء كتقرير مهني مصمت ليعرضه النظام.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+      });
+
+      return res.json({ progress: (response.text || "").trim() });
+    } catch (err: any) {
+      console.error("Gemini patient investigations progress brief error:", err);
+      res.json({ progress: getFallbackProgress(), isFallback: true, error: err.message });
     }
   });
 
@@ -611,10 +884,26 @@ async function startServer() {
     const index = db.appointments.findIndex(a => a.id === req.params.id);
     if (index !== -1) {
       const oldStatus = db.appointments[index].status;
+      const oldBranch = db.appointments[index].branch || "المعادي";
+      const oldDate = db.appointments[index].date;
+      
       db.appointments[index] = { ...db.appointments[index], ...req.body };
       
+      const changes: string[] = [];
       if (req.body.status && req.body.status !== oldStatus) {
-        await logAction(db, "UPDATE", req.params.id, "appointment", `Changed appointment status to ${req.body.status}`);
+        changes.push(`تغيير حالة الموعد إلى ${req.body.status}`);
+      }
+      if (req.body.branch && req.body.branch !== oldBranch) {
+        changes.push(`نقل الموعد من فرع (${oldBranch}) إلى فرع (${req.body.branch}) عبر السحب والإفلات السريع`);
+      }
+      if (req.body.date && req.body.date !== oldDate) {
+        changes.push(`تعديل موعد الكشف إلى ${req.body.date}`);
+      }
+
+      if (changes.length > 0) {
+        await logAction(db, "UPDATE", req.params.id, "appointment", changes.join(" | "), undefined, db.appointments[index]);
+      } else {
+        await logAction(db, "UPDATE", req.params.id, "appointment", "تحديث تفاصيل الموعد", undefined, db.appointments[index]);
       }
       
       await writeDb(db);

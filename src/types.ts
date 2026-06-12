@@ -17,12 +17,18 @@ export interface Doctor {
   hybridThreshold?: number;
   hybridExtraRate?: number;
   maxPatientsPerDay?: number;
+  branch?: string;
   attendance?: Array<{
     date: string;       // YYYY-MM-DD
     arrivalTime: string; // HH:mm
     departureTime: string; // HH:mm
     hoursWorked: number;
   }>;
+  weeklySchedule?: {
+    activeDays: number[]; // 0 for Sunday, 1 for Monday... 6 for Saturday
+    startTime: string; // "HH:mm"
+    endTime: string; // "HH:mm"
+  };
 }
 
 export interface Patient {
@@ -38,6 +44,7 @@ export interface Patient {
   nationalId?: string;
   passportNumber?: string;
   createdAt: string;
+  branch?: string;
 }
 
 export interface Appointment {
@@ -55,7 +62,9 @@ export interface Appointment {
   arrivalTime?: string;
   entryTime?: string;
   departureTime?: string;
+  isConfirmed?: boolean;
   createdAt: string;
+  branch?: string;
 }
 
 export interface Visit {
@@ -73,10 +82,30 @@ export interface Visit {
   doctorEarnings: number;
   clinicEarnings: number;
   notes: string;
+  clinicalAssessment?: string; // الوصف الطبي للحالة المستنتج من الكشف
+  prescriptions?: Array<{
+    id: string;
+    name: string;
+    quantity: string;
+    duration: string;
+  }>;
   diagnosis?: string;
   isPaid: boolean;
   status?: 'completed' | 'cancelled';
   cancellationReason?: string;
+  branch?: string;
+  vitals?: {
+    temperature?: string;
+    bloodPressure?: string;
+    pulse?: string;
+    weight?: string;
+    height?: string;
+    bmi?: string;
+  };
+  followUpRequired?: boolean;
+  followUpDate?: string;
+  followUpNotes?: string;
+  dietInstructions?: string;
 }
 
 export interface Report {
@@ -88,6 +117,7 @@ export interface Report {
   title: string;
   type: 'prescription' | 'report' | 'other';
   createdAt: string;
+  branch?: string;
 }
 
 export interface User {
@@ -98,6 +128,8 @@ export interface User {
   password?: string;
   doctorId?: string; // If user is a doctor
   permissions?: string[];
+  branch?: string;
+  additionalBranches?: string[];
 }
 
 export interface InventoryItem {
@@ -109,6 +141,10 @@ export interface InventoryItem {
   reorderPoint: number;
   expirationDate?: string;
   lastUpdated: string;
+  branch?: string;
+  storeType?: 'medical' | 'non-medical';
+  approvalStatus?: 'approved' | 'pending' | 'rejected';
+  lastApprovedBy?: string;
 }
 
 export interface AuditLog {
@@ -119,6 +155,7 @@ export interface AuditLog {
   userId?: string;
   details: string;
   timestamp: string;
+  branch?: string;
 }
 
 export interface Message {
@@ -133,5 +170,6 @@ export interface Message {
   content: string;
   createdAt: string;
   isRead?: boolean;
+  branch?: string;
 }
 

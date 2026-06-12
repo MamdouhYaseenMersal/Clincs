@@ -652,6 +652,9 @@ export default function App() {
                 inventory={filteredInventory}
                 inventoryWarnings={inventoryWarnings}
                 onRefillInventory={handleRefillInventoryItem}
+                onRefresh={loadData}
+                selectedBranch={selectedBranch}
+                currentUser={currentUser}
               />
             )}
             {activeView === 'patients' && <PatientsView key="pts" patients={filteredPatients} doctors={filteredDoctors} onRefresh={loadData} onSelectPatient={navigateToProfile} selectedBranch={selectedBranch} />}
@@ -780,8 +783,94 @@ function Dashboard({
   appointments, 
   inventory, 
   inventoryWarnings = [], 
-  onRefillInventory 
+  onRefillInventory,
+  onRefresh,
+  selectedBranch,
+  currentUser
 }: any) {
+  const [quickSearch, setQuickSearch] = useState("");
+  const [showQuickDropdown, setShowQuickDropdown] = useState(false);
+  const [selectedQuickPatient, setSelectedQuickPatient] = useState<any>(null);
+  
+  // Quick booking fields
+  const [quickDoctorId, setQuickDoctorId] = useState("");
+  const [quickDate, setQuickDate] = useState(dayjs().add(1, 'day').format('YYYY-MM-DDTHH:mm'));
+  const [quickBranch, setQuickBranch] = useState(selectedBranch || "المعادي");
+  const [quickNotes, setQuickNotes] = useState("");
+  const [quickIsSpecial, setQuickIsSpecial] = useState(false);
+  const [bookingInProgress, setBookingInProgress] = useState(false);
+
+  // Search History for Patients
+  const [searchHistory, setSearchHistory] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem('patient_search_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const selectPatientAndAddToHistory = (patient: any) => {
+    setSelectedQuickPatient(patient);
+    setSearchHistory((prev: any[]) => {
+      const filtered = prev.filter(p => p.id !== patient.id);
+      const updated = [patient, ...filtered].slice(0, 5); // keep last 5
+      localStorage.setItem('patient_search_history', JSON.stringify(updated));
+      return updated;
+    });
+    setQuickSearch("");
+    setShowQuickDropdown(false);
+  };
+
+  const quickFilteredPatients = useMemo(() => {
+    if (!quickSearch) return [];
+    return patients.filter((p: any) => 
+      p.name.toLowerCase().includes(quickSearch.toLowerCase()) || 
+      p.phone.includes(quickSearch) || 
+      (p.caseCode && p.caseCode.toLowerCase().includes(quickSearch.toLowerCase()))
+    ).slice(0, 5);
+  }, [quickSearch, patients]);
+
+  const handleQuickBook = async () => {
+    if (!selectedQuickPatient) {
+      alert("الرجاء اختيار مريض أولاً");
+      return;
+    }
+    if (!quickDoctorId) {
+      alert("الرجاء اختيار الطبيب");
+      return;
+    }
+    setBookingInProgress(true);
+    try {
+      const appointmentData: any = {
+        patientId: selectedQuickPatient.id,
+        doctorId: quickDoctorId,
+        date: quickDate,
+        notes: quickNotes,
+        status: 'scheduled',
+        reminderEnabled: true,
+        reminderLeadTimeHours: 2,
+        isSpecial: quickIsSpecial,
+        specialPrice: 0,
+        branch: quickBranch
+      };
+
+      await api.createAppointment(appointmentData);
+      alert(`🎉 تم حجز موعد سريع للمريض (${selectedQuickPatient.name}) بنجاح وتحديث الأرشيف فورياً دون مغادرة لوحة التحكم!`);
+      
+      // Reset form
+      setSelectedQuickPatient(null);
+      setQuickNotes("");
+      setQuickDoctorId("");
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error(err);
+      alert("حدث خطأ أثناء حجز الموعد السريع.");
+    } finally {
+      setBookingInProgress(false);
+    }
+  };
+
   const [cardConfig, setCardConfig] = useState<StatsCardConfig[]>(() => {
     const saved = localStorage.getItem('dashboard_cards');
     if (saved) return JSON.parse(saved);
@@ -1213,6 +1302,178 @@ function Dashboard({
         </div>
 
         <div className="col-span-12 lg:col-span-4 space-y-6">
+          {/* ⚡ اختصارات الحجز الطبي السريع */}
+          <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl border border-indigo-500/30 shadow-xl p-5 space-y-4">
+            <div className="flex items-center gap-2 border-b border-indigo-500/25 pb-3">
+              <Clock className="text-indigo-400 rotate-12" size={18} />
+              <div>
+                <h3 className="text-xs font-black text-indigo-100 uppercase tracking-wider">⚡ اختصارات الحجز الطبي السريع</h3>
+                <p className="text-[9px] text-slate-300 font-medium">حجز موعد فوري دون مغادرة لوحة التحكم الرئيسية</p>
+              </div>
+            </div>
+
+            {/* البحث عن مريض */}
+            <div className="space-y-1.5 relative">
+              <label className="text-[10px] font-black text-slate-400 block text-right">البحث عن المريض المستهدف للحجز:</label>
+              <div className="relative">
+                <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={13} />
+                <input 
+                  type="text" 
+                  placeholder="ابحث بالاسم، الكود، أو رقم الهاتف..." 
+                  className="w-full pr-9 pl-3 py-2 bg-slate-800/80 border border-slate-700 rounded-lg text-slate-200 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold"
+                  value={quickSearch}
+                  onChange={(e) => {
+                    setQuickSearch(e.target.value);
+                    setShowQuickDropdown(true);
+                  }}
+                  onFocus={() => setShowQuickDropdown(true)}
+                />
+              </div>
+
+              {/* نتائج البحث المنسدلة */}
+              {showQuickDropdown && quickSearch && (
+                <div className="absolute z-30 w-full mt-1 bg-slate-850 border border-slate-700/80 rounded-lg shadow-2xl overflow-hidden divide-y divide-slate-800 text-right text-xs">
+                  {quickFilteredPatients.map((p: any) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => selectPatientAndAddToHistory(p)}
+                      className="w-full px-3 py-2.5 hover:bg-indigo-650/30 text-slate-200 flex justify-between items-center transition-colors font-bold text-right"
+                    >
+                      <span className="text-[10px] text-slate-400 font-mono">#{p.caseCode}</span>
+                      <div className="flex flex-col text-right">
+                        <span>{p.name}</span>
+                        <span className="text-[9px] text-slate-400">{p.phone}</span>
+                      </div>
+                    </button>
+                  ))}
+                  {quickFilteredPatients.length === 0 && (
+                    <div className="px-3 py-4 text-center text-slate-500 text-[10px] italic">لم يتم العثور على مريض</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* سجل المرضى الذين تم البحث عنهم سابقاً */}
+            {searchHistory.length > 0 && !selectedQuickPatient && (
+              <div className="space-y-1.5 text-right">
+                <span className="text-[9.5px] font-black text-indigo-300">🔍 مرضى تم البحث عنهم مسبقاً (انقر للاستدعاء):</span>
+                <div className="flex flex-wrap gap-1.5 max-h-[105px] overflow-y-auto pr-0.5">
+                  {searchHistory.map((pHist: any) => (
+                    <button
+                      key={pHist.id}
+                      type="button"
+                      onClick={() => setSelectedQuickPatient(pHist)}
+                      className="text-[10px] bg-slate-800 hover:bg-indigo-900/40 text-slate-200 font-bold px-2.5 py-1 rounded-md border border-indigo-500/10 hover:border-indigo-500/30 transition-all truncate max-w-[150px]"
+                      title={`حجز سريع للمريض: ${pHist.name}`}
+                    >
+                      👤 {pHist.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* تفاصيل الحجز الفوري للأخصائي */}
+            {selectedQuickPatient ? (
+              <div className="bg-slate-850/50 p-3.5 rounded-lg border border-indigo-500/15 space-y-3 relative text-right animate-in fade-in duration-200">
+                <button 
+                  onClick={() => setSelectedQuickPatient(null)} 
+                  className="absolute left-2.5 top-2.5 text-slate-400 hover:text-slate-300 text-[10px] font-bold"
+                >
+                  إلغاء ✕
+                </button>
+                
+                <div className="pb-2 border-b border-slate-800/60">
+                  <span className="text-[9px] text-slate-400 font-bold block uppercase">المريض المحدد للحجز:</span>
+                  <div className="font-extrabold text-indigo-300 text-xs mt-0.5">{selectedQuickPatient.name}</div>
+                  <span className="text-[9.5px] text-slate-400 font-mono">كود الملف: #{selectedQuickPatient.caseCode}</span>
+                </div>
+
+                <div className="space-y-2">
+                  {/* اختيار الطبيب */}
+                  <div>
+                    <label className="text-[9.5px] text-slate-300 font-black block mb-1">اختر الطبيب المعالج والعيادة:</label>
+                    <select 
+                      required
+                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-slate-200 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      value={quickDoctorId}
+                      onChange={(e) => setQuickDoctorId(e.target.value)}
+                    >
+                      <option value="">- اختر طبيب التخصص -</option>
+                      {doctors.map((d: any) => (
+                        <option key={d.id} value={d.id}>د. {d.name} ({d.specialty})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* اختيار التاريخ والوقت */}
+                  <div>
+                    <label className="text-[9.5px] text-slate-300 font-black block mb-1">وقت وتاريخ الموعد منجدولاً:</label>
+                    <input 
+                      type="datetime-local"
+                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-slate-200 text-xs font-bold focus:outline-none"
+                      value={quickDate}
+                      onChange={(e) => setQuickDate(e.target.value)}
+                    />
+                  </div>
+
+                  {/* فرع الحجز والسحب */}
+                  <div>
+                    <label className="text-[9.5px] text-slate-300 font-black block mb-1">فرع الكشف الطبي:</label>
+                    <select 
+                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-slate-200 text-xs font-bold focus:outline-none"
+                      value={quickBranch}
+                      onChange={(e) => setQuickBranch(e.target.value)}
+                    >
+                      <option value="المعادي">فرع المعادي</option>
+                      <option value="الدقي">فرع الدقي</option>
+                      <option value="مدينة نصر">فرع مدينة نصر</option>
+                      <option value="اسكندرية">فرع اسكندرية</option>
+                    </select>
+                  </div>
+
+                  {/* ملاحظات سريرية */}
+                  <div>
+                    <label className="text-[9.5px] text-slate-300 font-black block mb-1">ملاحظات سريرية أو شكوى المريض:</label>
+                    <input 
+                      type="text"
+                      placeholder="شكوى معينة، فحص مستعجل..."
+                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-slate-200 text-xs font-medium focus:outline-none"
+                      value={quickNotes}
+                      onChange={(e) => setQuickNotes(e.target.value)}
+                    />
+                  </div>
+
+                  {/* كشف خاص */}
+                  <div className="flex items-center gap-2 justify-end pt-1">
+                    <span className="text-[10px] text-slate-300 font-bold">كشف خاص / مستعجل (ضعف السعر)</span>
+                    <input 
+                      type="checkbox" 
+                      className="size-3.5 bg-slate-800 border-slate-705 rounded text-indigo-600 focus:ring-indigo-500" 
+                      checked={quickIsSpecial}
+                      onChange={(e) => setQuickIsSpecial(e.target.checked)}
+                    />
+                  </div>
+
+                  {/* زر التأكيد */}
+                  <button
+                    type="button"
+                    disabled={bookingInProgress}
+                    onClick={handleQuickBook}
+                    className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[10.5px] font-black shadow-md active:scale-95 transition-all mt-2 flex items-center justify-center gap-2"
+                  >
+                    <span>📅 تأكيد الحجز السريع وتحديث الأرشيف</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-4 text-slate-400 text-[10px] italic border border-dashed border-slate-700 rounded-lg">
+                الرجاء البحث عن مريض أعلاه أو النقر على أحد المرضى السابق البحث عنهم لبدء الحجز السريع.
+              </div>
+            )}
+          </div>
+
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
             <h2 className="font-bold text-slate-800 mb-4">ملف آخر حالة</h2>
             {patients.length > 0 ? (
@@ -1871,7 +2132,10 @@ function ImportExcelModal({ onClose, doctors, existingPatients, onComplete, sele
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-[2px]">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.98, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -2143,7 +2407,10 @@ function PatientModal({ onClose, onSubmit, initialData }: any) {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.98, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -2868,7 +3135,10 @@ function DoctorsView({ doctors, visits, patients = [], onRefresh, selectedBranch
           />
         )}
         {payrollDoctor && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px] font-sans">
+          <div 
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px] font-sans"
+            onClick={(e) => { if (e.target === e.currentTarget) setPayrollDoctor(null); }}
+          >
             <motion.div 
               initial={{ opacity: 0, scale: 0.98, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -3163,7 +3433,10 @@ function DoctorModal({ onClose, onSubmit, initialData }: any) {
   const [autoLinkHybrid, setAutoLinkHybrid] = useState(true);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.98, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -4745,7 +5018,10 @@ function EditVisitModal({ onClose, visit, onSubmit, onUploadAttachment }: any) {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.98, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -5221,7 +5497,10 @@ function PrintPrescriptionModal({ onClose, visit, patient, doctor, onRefresh }: 
   const linkedMedsCount = medicines.filter(m => m.inventoryItemId).length;
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-[3px] overflow-y-auto">
+    <div 
+      className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-[3px] overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
           body * {
@@ -5794,7 +6073,10 @@ function PrintMedicalReportModal({ onClose, visit, patient, doctor }: { onClose:
 
 function PrintConfirmModal({ onClose, visit, onPrintPrescription, onPrintReport }: any) {
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+    <div 
+      className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.95, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -5850,7 +6132,10 @@ function VisitDetailsModal({ onClose, visit, doctors, reports, onEdit, patient, 
   const visitReports = (reports || []).filter((r: any) => r.visitId === visit.id);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/45 backdrop-blur-[2px]">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/45 backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.98, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -6161,7 +6446,10 @@ function CompleteAppointmentModal({ onClose, appointment, doctors, visits, onSub
   const clinicShare = Math.max(0, Number(formData.basePrice) - doctorShare);
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div 
+      className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.95, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -6675,7 +6963,10 @@ function VisitModal({ onClose, doctors, onSubmit }: any) {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.98, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -7051,7 +7342,10 @@ function UploadModal({ onClose, onUpload, visits, doctors, initialVisitId }: any
   const [visitId, setVisitId] = useState(initialVisitId || mostRecentCompletedVisitId);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.98, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -9001,7 +9295,10 @@ function InventoryModal({ onClose, onSubmit, initialData }: any) {
   });
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.98, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -9954,7 +10251,10 @@ function DailyReportPrintModal({ onClose, date, appointments, doctors, patients 
   };
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-[3px] overflow-y-auto">
+    <div 
+      className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-[3px] overflow-y-auto"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
           body * {
@@ -10252,7 +10552,10 @@ function AppointmentModal({ onClose, onSubmit, doctors, patients, getDoctorLoad,
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.98, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -11598,7 +11901,10 @@ function ImportAppointmentsExcelModal({ onClose, doctors, patients, onComplete }
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.98, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -12262,7 +12568,11 @@ function UserSettingsModal({ onClose, currentUser, setCurrentUser, users, onUpda
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[999] p-4 text-right animate-in fade-in duration-250" dir="rtl">
+    <div 
+      className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[999] p-4 text-right animate-in fade-in duration-250" 
+      dir="rtl"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       <motion.div 
         initial={{ opacity: 0, scale: 0.95, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}

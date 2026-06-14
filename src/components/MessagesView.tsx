@@ -35,6 +35,7 @@ interface MessagesViewProps {
   onRefreshAllData?: () => void;
   preselectedPatientId?: string;
   onClearPreselect?: () => void;
+  currentUser?: User;
 }
 
 export default function MessagesView({ 
@@ -42,7 +43,8 @@ export default function MessagesView({
   patients, 
   onRefreshAllData, 
   preselectedPatientId,
-  onClearPreselect 
+  onClearPreselect,
+  currentUser
 }: MessagesViewProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
@@ -82,9 +84,10 @@ export default function MessagesView({
       setMessages(allMsgs.sort((a, b) => dayjs(b.createdAt).diff(dayjs(a.createdAt))));
       setSystemUsers(allUsers);
       
-      // Default to first user if none selected
+      // Default to currentUser if found (by ID/username), or fall back to first user
       if (!simulatedUser && allUsers.length > 0) {
-        setSimulatedUser(allUsers[0]);
+        const matched = currentUser ? allUsers.find(u => u.id === currentUser.id || u.username === currentUser.username) : null;
+        setSimulatedUser(matched || allUsers[0]);
       }
     } catch (err) {
       console.error("Failed to fetch messages or users", err);

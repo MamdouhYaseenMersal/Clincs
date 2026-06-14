@@ -40,7 +40,8 @@ import {
   Bell,
   MapPin,
   Volume2,
-  Activity
+  Activity,
+  Printer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -89,6 +90,9 @@ export default function App() {
   const [autoCompleteAppointmentId, setAutoCompleteAppointmentId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [messagesPreselectPatientId, setMessagesPreselectPatientId] = useState<string>('');
+  const [messages, setMessages] = useState<any[]>([]);
+  const [activeNotification, setActiveNotification] = useState<{ id: string, sender: string, content: string } | null>(null);
+  const [lastMessageCount, setLastMessageCount] = useState<number>(0);
 
   // Derived filtered state arrays representing branch-scoped records
   const filteredPatients = patients.filter(p => !p.branch || p.branch === selectedBranch);
@@ -118,6 +122,17 @@ export default function App() {
     const additional = currentUser.additionalBranches || [];
     return !additional.includes(b);
   };
+
+  const unreadCount = useMemo(() => {
+    if (!currentUser) return 0;
+    return messages.filter((m: any) => {
+      if (m.isRead) return false;
+      if (m.senderId === currentUser.id) return false;
+      const isPrivateToMe = m.receiverId === currentUser.id;
+      const isRoleToMe = m.receiverRole === currentUser.role || m.receiverRole === 'all';
+      return isPrivateToMe || isRoleToMe;
+    }).length;
+  }, [messages, currentUser]);
 
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
 
@@ -254,14 +269,15 @@ export default function App() {
   // Load Initial Data
   const loadData = async () => {
     try {
-      const [pts, docs, vst, logs, inv, appts, usr] = await Promise.all([
+      const [pts, docs, vst, logs, inv, appts, usr, msgs] = await Promise.all([
         api.getPatients(),
         api.getDoctors(),
         api.getVisits(),
         api.getAuditLogs(),
         api.getInventory(),
         api.getAppointments(),
-        api.getUsers()
+        api.getUsers(),
+        api.getMessages()
       ]);
       setPatients(pts);
       setDoctors(docs);
@@ -270,6 +286,7 @@ export default function App() {
       setInventory(inv);
       setAppointments(appts);
       setUsers(usr);
+      setMessages(msgs || []);
     } catch (error) {
       console.error("Failed to load data", error);
     }
@@ -277,7 +294,73 @@ export default function App() {
 
   useEffect(() => {
     loadData();
+    // Poll messages every 6 seconds for live update notification
+    const interval = setInterval(async () => {
+      try {
+        const msgs = await api.getMessages();
+        setMessages(msgs || []);
+      } catch (err) {
+        console.error(err);
+      }
+    }, 6000);
+    return () => clearInterval(interval);
   }, []);
+
+  // Alert/Notification trigger for newly arrived messages
+  useEffect(() => {
+    if (messages.length > lastMessageCount) {
+      if (lastMessageCount > 0) {
+        const sorted = [...messages].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        const newest = sorted[0];
+        if (newest && currentUser && newest.senderId !== currentUser.id) {
+          const isPrivate = newest.receiverId === currentUser.id;
+          const isRole = newest.receiverRole === currentUser.role || newest.receiverRole === 'all';
+          if (isPrivate || isRole) {
+            setActiveNotification({
+              id: newest.id,
+              sender: newest.senderName,
+              content: newest.content.length > 50 ? newest.content.substring(0, 50) + '...' : newest.content
+            });
+            
+            // Play a pleasant digital alert chime dynamically using Web Audio API (cross-browser, zero external files)
+            try {
+              const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+              if (AudioContextClass) {
+                const audioCtx = new AudioContextClass();
+                const osc = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                osc.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                
+                osc.type = 'sine';
+                // Play sweet high-pitched digital chime pair
+                const now = audioCtx.currentTime;
+                osc.frequency.setValueAtTime(587.33, now); // D5
+                osc.frequency.setValueCurveAtTime([587.33, 880], now, 0.12); // Sliding pitch transition to A5
+                
+                gainNode.gain.setValueAtTime(0.002, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.3, now + 0.04);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+                
+                osc.start(now);
+                osc.stop(now + 0.5);
+              }
+            } catch (soundErr) {
+              console.warn("Autoplay blocked or audio context unsupported:", soundErr);
+            }
+
+            // Auto dismiss after 5 seconds
+            setTimeout(() => {
+              setActiveNotification(null);
+            }, 5000);
+          }
+        }
+      }
+      setLastMessageCount(messages.length);
+    } else if (messages.length < lastMessageCount) {
+      setLastMessageCount(messages.length);
+    }
+  }, [messages, currentUser, lastMessageCount]);
 
   // Set active simulated user session on initial load or retrieval
   useEffect(() => {
@@ -465,6 +548,7 @@ export default function App() {
             active={activeView === 'messages'} 
             onClick={() => setActiveView('messages')} 
             collapsed={!isSidebarOpen}
+            badge={unreadCount > 0 ? unreadCount : undefined}
           />
           <NavItem 
             icon={<FileText size={20} />} 
@@ -706,6 +790,7 @@ export default function App() {
                 onRefreshAllData={loadData} 
                 preselectedPatientId={messagesPreselectPatientId}
                 onClearPreselect={() => setMessagesPreselectPatientId('')}
+                currentUser={currentUser}
               />
             )}
             {activeView === 'audit-logs' && <AuditLogsView key="audit" logs={filteredAuditLogs} onRefresh={loadData} users={users} />}
@@ -728,6 +813,39 @@ export default function App() {
                   setActiveView('messages');
                 }}
               />
+            )}
+          </AnimatePresence>
+
+          {/* Floating Message Notification Toast */}
+          <AnimatePresence>
+            {activeNotification && (
+              <motion.div 
+                initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                className="fixed bottom-6 right-6 z-[250] max-w-sm bg-slate-900 border border-slate-850 text-white rounded-2xl shadow-2xl p-4 flex gap-3 text-right"
+              >
+                <div className="size-10 bg-indigo-600 rounded-full flex items-center justify-center shrink-0 shadow-lg shadow-indigo-600/20">
+                  <MessageCircle size={18} className="text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-indigo-300">ملاحظة أو رسالة تواصل جديدة 🔔</div>
+                  <p className="text-xs font-black text-slate-100 mt-1">المُرسل: {activeNotification.sender}</p>
+                  <p className="text-[11px] text-slate-300 mt-1 leading-relaxed truncate">{activeNotification.content}</p>
+                  <button 
+                    onClick={() => { setActiveView('messages'); setActiveNotification(null); }}
+                    className="mt-2 text-xs font-bold text-indigo-400 hover:text-indigo-300 underline"
+                  >
+                    فتح نافذة المراسلات المباشرة ←
+                  </button>
+                </div>
+                <button 
+                  onClick={() => setActiveNotification(null)}
+                  className="text-slate-400 hover:text-white self-start text-sm font-bold opacity-70 hover:opacity-100"
+                >
+                  ✕
+                </button>
+              </motion.div>
             )}
           </AnimatePresence>
         </div>
@@ -756,14 +874,19 @@ export default function App() {
   );
 }
 
-function NavItem({ icon, label, active, onClick, collapsed }: { icon: any, label: string, active: boolean, onClick: () => void, collapsed: boolean }) {
+function NavItem({ icon, label, active, onClick, collapsed, badge }: { icon: any, label: string, active: boolean, onClick: () => void, collapsed: boolean, badge?: any }) {
   return (
     <button 
       onClick={onClick}
-      className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
+      className={`relative w-full flex items-center gap-3 p-3 rounded-lg transition-all ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
     >
       <span className={active ? 'text-white' : 'opacity-60'}>{icon}</span>
       {!collapsed && <span className="font-medium text-sm truncate">{label}</span>}
+      {badge && (
+        <span className={`absolute top-2.5 left-2.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-black text-white shadow-sm border border-slate-900 ${collapsed ? '-top-1 -left-1' : ''} animate-pulse`}>
+          {badge}
+        </span>
+      )}
     </button>
   );
 }
@@ -2391,8 +2514,11 @@ function PatientModal({ onClose, onSubmit, initialData }: any) {
   const handleDateOfBirthChange = (val: string) => {
     let calculatedAge = "";
     if (val) {
-      const years = dayjs().diff(dayjs(val), 'year');
-      calculatedAge = years >= 0 ? years.toString() : "";
+      const birthDate = dayjs(val);
+      if (birthDate.isValid()) {
+        const years = dayjs().diff(birthDate, 'year');
+        calculatedAge = years >= 0 ? years.toString() : "0";
+      }
     }
     setFormData({ ...formData, dateOfBirth: val, age: calculatedAge });
   };
@@ -2496,12 +2622,35 @@ function PatientModal({ onClose, onSubmit, initialData }: any) {
 
             <div className="space-y-1">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">تاريخ الميلاد</label>
-              <input type="date" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.dateOfBirth} onChange={(e) => handleDateOfBirthChange(e.target.value)} />
+              <input type="date" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold text-right" value={formData.dateOfBirth} onChange={(e) => handleDateOfBirthChange(e.target.value)} />
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">السن (يُحتسب تلقائياً)</label>
-              <input required type="number" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-black" value={formData.age} onChange={(e) => setFormData({...formData, age: e.target.value})} />
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">
+                {formData.dateOfBirth ? "السن (يُحتسب تلقائياً)" : "السن (أدخل القيمة يدوياً)"}
+              </label>
+              <input 
+                required 
+                type="number" 
+                disabled={!!formData.dateOfBirth} 
+                className={`w-full px-4 py-2.5 border rounded-lg focus:outline-none transition-all text-sm font-black ${
+                  formData.dateOfBirth 
+                    ? 'bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed' 
+                    : 'bg-slate-50 border-slate-200 focus:ring-2 focus:ring-blue-500/10 text-slate-800'
+                }`}
+                value={formData.age} 
+                onChange={(e) => setFormData({...formData, age: e.target.value})} 
+                placeholder="مثال: 30"
+              />
+              {formData.dateOfBirth ? (
+                <p className="text-[9px] text-slate-400 font-bold leading-relaxed mt-1">
+                  🔒 تم قفل حقل السن ليتطابق تلقائياً مع تاريخ الميلاد. لمسح القفل وتعديل السن يدوياً، يرجى تفريغ تاريخ الميلاد أولاً.
+                </p>
+              ) : (
+                <p className="text-[9px] text-blue-500 font-bold leading-relaxed mt-1">
+                  ✍️ نظراً لعدم توفر تاريخ ميلاد، يرجى إدخال سن المريض يدوياً لضمان اكتمال السجل السريري.
+                </p>
+              )}
             </div>
 
             <div className="space-y-1 col-span-2">
@@ -3741,6 +3890,56 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
   const [printPrescriptionVisit, setPrintPrescriptionVisit] = useState<Visit | null>(null);
   const [printMedicalReportVisit, setPrintMedicalReportVisit] = useState<Visit | null>(null);
   const [printConfirmVisit, setPrintConfirmVisit] = useState<Visit | null>(null);
+  const [showPrintSummary, setShowPrintSummary] = useState(false);
+  
+  // Custom states for Quick Vitals, Gallery Preview, Lightbox, and Chronic Diseases
+  const [showQuickVitalsModal, setShowQuickVitalsModal] = useState(false);
+  const [fileViewMode, setFileViewMode] = useState<'table' | 'gallery'>('gallery');
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [lightboxScale, setLightboxScale] = useState<number>(1);
+  const [lightboxRotation, setLightboxRotation] = useState<number>(0);
+
+  const detectedChronicDiseases = useMemo(() => {
+    if (!patientVisits || patientVisits.length === 0) return [];
+    
+    const CHRONIC_DISEASE_KEYWORDS = [
+      { name: 'ارتفاع ضغط الدم (Hypertension)', keywords: ['ضغط', 'hypertension', 'blood pressure', 'htn', 'مرتفع الضغط'] },
+      { name: 'السكري (Diabetes)', keywords: ['سكري', 'سكر', 'diabetes', 'dm', 'insulin', 'أنسولين', 'انسولين'] },
+      { name: 'الربو ومشاكل الجهاز التنفسي المزمنة (Asthma/COPD)', keywords: ['ربو', 'حساسية صدر', 'asthma', 'copd', 'تنفسي مزمن'] },
+      { name: 'أمراض القلب والشرايين (Heart Disease)', keywords: ['قلب', 'شرايين', 'قصور القلب', 'heart', 'coronary', 'cardiac'] },
+      { name: 'الفشل الكلوي أو اعتلال الكلى المزمن (Chronic Kidney Disease)', keywords: ['كلى', 'فشل كلوي', 'kidney', 'ckd', 'اعتلال الكلى'] },
+      { name: 'الغدة الدرقية (Thyroid Disorder)', keywords: ['درقية', 'غدة درقية', 'thyroid', 'goiter'] },
+      { name: 'الصرع أو الاضطرابات العصبية (Epilepsy/Neurological)', keywords: ['صرع', 'تشنج', 'epilepsy', 'neurological', 'اعصاب', 'أعصاب'] },
+    ];
+    
+    const detected: { name: string; foundIn: string; date: string }[] = [];
+    
+    patientVisits.forEach(v => {
+      const diagStr = (v.diagnosis || "").toLowerCase();
+      const notesStr = (v.notes || "").toLowerCase();
+      const clinicalStr = (v.clinicalAssessment || "").toLowerCase();
+      
+      CHRONIC_DISEASE_KEYWORDS.forEach(disease => {
+        if (detected.some(d => d.name === disease.name)) return;
+        
+        const matchedKeyword = disease.keywords.find(keyword => 
+          diagStr.includes(keyword) || 
+          notesStr.includes(keyword) ||
+          clinicalStr.includes(keyword)
+        );
+        
+        if (matchedKeyword) {
+          detected.push({
+            name: disease.name,
+            foundIn: v.diagnosis ? `${v.diagnosis}` : 'ملاحظات الكشف العيادي',
+            date: v.date
+          });
+        }
+      });
+    });
+    
+    return detected;
+  }, [patientVisits]);
 
   // AI-Assisted Medicolegal Briefing & Progress States
   const [aiFolderBrief, setAiFolderBrief] = useState<string>('');
@@ -3866,6 +4065,10 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
     }));
   };
 
+  const upcomingAppointment = useMemo(() => {
+    return appointments.find((a: any) => a.status === 'scheduled');
+  }, [appointments]);
+
   const handleSendReminder = async (apptId: string) => {
     await api.sendAppointmentReminder(apptId);
     loadProfile();
@@ -3929,13 +4132,75 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
             <Plus size={14} /> تسجيل كشف
           </button>
           <button 
+            type="button"
+            onClick={() => setShowQuickVitalsModal(true)}
+            className="bg-teal-600 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 hover:bg-teal-700 transition-all shadow-md shadow-teal-900/10"
+          >
+            <Activity size={14} /> فحص سريع علامات حيوية
+          </button>
+          <button 
             onClick={() => setIsScheduling(true)}
             className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-indigo-700 transition-all shadow-md shadow-indigo-900/10"
           >
             <Calendar size={14} /> جدولة متابعة
           </button>
+          <button 
+            onClick={() => setShowPrintSummary(true)}
+            className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-amber-900/10"
+          >
+            <Printer size={14} /> طباعة ملخص المريض
+          </button>
         </div>
       </header>
+
+      {upcomingAppointment && (
+        <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 animate-in fade-in slide-in-from-top-3 duration-250 text-right">
+          <div className="flex items-center gap-3">
+            <div className="size-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center shadow-md shrink-0">
+              <Calendar size={16} />
+            </div>
+            <div>
+              <div className="text-xs font-black text-emerald-950">موعد قائم ومجدول قريباً للمريض</div>
+              <p className="text-[10px] text-emerald-800 font-bold mt-0.5">
+                د. {doctors.find((d: any) => d.id === upcomingAppointment.doctorId)?.name || '---'} | {dayjs(upcomingAppointment.date).format('DD MMMM YYYY - hh:mm a')} {upcomingAppointment.branch ? `| فرع: ${upcomingAppointment.branch}` : ''}
+              </p>
+            </div>
+          </div>
+          <a
+            href={getWhatsAppLink(upcomingAppointment, doctors.find((d: any) => d.id === upcomingAppointment.doctorId))}
+            target="_blank"
+            rel="noreferrer"
+            className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black shadow-md shadow-emerald-950/10 flex items-center justify-center gap-1.5 hover:scale-[1.01] transition-all"
+          >
+            <MessageCircle size={14} />
+            <span>إرسال تفاصيل الموعد للمريض (واتساب) 🟢</span>
+          </a>
+        </div>
+      )}
+
+      {detectedChronicDiseases.length > 0 && (
+        <div className="bg-rose-50/70 border border-rose-200 rounded-xl p-4 animate-in fade-in slide-in-from-top-3 duration-350 text-right space-y-2 mt-3">
+          <div className="flex items-center gap-2">
+            <span className="bg-rose-100 text-rose-800 text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
+              <span className="size-2 rounded-full bg-rose-600 animate-pulse" />
+              تنبيه طبي: أمراض مزمنة تم رصدها آلياً بالتحليل الذكي لكامل سجل الزيارات 🚨
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-1">
+            {detectedChronicDiseases.map((disease, idx) => (
+              <div key={idx} className="bg-white border border-rose-100 rounded-xl p-3 flex gap-2.5 shadow-xs hover:shadow-sm transition-all text-xs text-rose-950 font-bold items-start">
+                <div className="size-7 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center text-sm shrink-0 shadow-xs">🩺</div>
+                <div className="min-w-0">
+                  <div className="text-rose-900 font-extrabold truncate">{disease.name}</div>
+                  <div className="text-[10px] text-slate-400 mt-1 font-bold">
+                    تم رصده في: <span className="text-slate-600 italic">"{disease.foundIn}"</span> بتاريخ {dayjs(disease.date).format('DD/MM/YYYY')}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Tabs Navigation */}
       <div className="flex border-b border-slate-200 gap-6">
@@ -4445,19 +4710,19 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
                       {dayjs(a.date).format('DD MMMM YYYY - hh:mm a')}
                     </div>
                     
-                    {a.reminderEnabled && a.status === 'scheduled' && (
-                      <div className={`flex items-center justify-between p-2 rounded-lg border mb-3 ${a.reminderSent ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-blue-50 border-blue-100 text-blue-700'}`}>
-                         <div className="flex items-center gap-2">
-                           <div className={`size-1.5 rounded-full ${a.reminderSent ? 'bg-emerald-500' : 'bg-blue-500 animate-pulse'}`} />
+                    {a.status === 'scheduled' && (
+                      <div className={`flex items-center justify-between p-2 rounded-lg border mb-3 ${a.reminderSent ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                         <div className="flex items-center gap-2 pr-1">
+                           <div className={`size-1.5 rounded-full ${a.reminderSent ? 'bg-emerald-500' : 'bg-emerald-500 animate-pulse'}`} />
                            <span className="text-[9px] font-black uppercase tracking-wider">
-                             {a.reminderSent ? 'تم إرسال التذكير بنجاح' : `تذكير تلقائي (قبل ${a.reminderLeadTimeHours}س)`}
+                             {a.reminderSent ? 'تم إرسال التذكير بنجاح' : (a.reminderEnabled ? `تذكير تلقائي (قبل ${a.reminderLeadTimeHours}س)` : 'إرسال تذكير بالموعد')}
                            </span>
                          </div>
                          <div className="flex items-center gap-1.5">
                            {!a.reminderSent && (
                              <button 
                                onClick={() => handleSendReminder(a.id)}
-                               className="text-[9px] font-black text-white bg-blue-600 px-3 py-1 rounded hover:bg-blue-700 transition-all uppercase flex items-center gap-1 shadow-sm font-sans"
+                               className="text-[9px] font-black text-white bg-blue-600 px-3 py-1 rounded hover:bg-blue-700 transition-all uppercase flex items-center gap-1 shadow-sm font-sans cursor-pointer border-0"
                              >
                                <TrendingUp size={10} />
                                <span>تذكير SMS</span>
@@ -4470,7 +4735,7 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
                              className="text-[9px] font-black text-white bg-emerald-600 px-3 py-1 rounded hover:bg-emerald-700 transition-all uppercase flex items-center gap-1 shadow-sm font-sans"
                            >
                              <MessageCircle size={10} />
-                             <span>تذكير واتساب</span>
+                             <span>مراسلة واتساب 🟢</span>
                            </a>
                          </div>
                       </div>
@@ -4610,8 +4875,27 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
                 </button>
               </div>
 
-              {/* Sorting Selection */}
-              <div className="flex items-center gap-2.5 w-full md:w-auto justify-end">
+              {/* Sorting & Gallery Toggle Selection */}
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
+                <div className="flex items-center gap-1.5 border-l border-slate-200 pl-3">
+                  <button
+                    type="button"
+                    onClick={() => setFileViewMode('gallery')}
+                    className={`p-2 rounded-lg flex items-center justify-center transition-all ${fileViewMode === 'gallery' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-100'}`}
+                    title="عرض معرض الصور"
+                  >
+                    <LayoutGrid size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFileViewMode('table')}
+                    className={`p-2 rounded-lg flex items-center justify-center transition-all ${fileViewMode === 'table' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-100'}`}
+                    title="عرض جدول المرفقات"
+                  >
+                    <List size={15} />
+                  </button>
+                </div>
+
                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">الترتيب:</span>
                 <select 
                   value={reportSort.key} 
@@ -4661,65 +4945,130 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
               </div>
             )}
             
-            <div className="overflow-x-auto border border-slate-100 rounded-xl">
-              <table className="w-full text-right border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest text-center">
-                    <th className="px-6 py-4 border-b border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => toggleReportSort('createdAt')}>
-                      التاريخ {reportSort.key === 'createdAt' && (reportSort.dir === 'asc' ? '↑' : '↓')}
-                    </th>
-                    <th className="px-6 py-4 border-b border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors text-right" onClick={() => toggleReportSort('title')}>
-                      العنوان {reportSort.key === 'title' && (reportSort.dir === 'asc' ? '↑' : '↓')}
-                    </th>
-                    <th className="px-6 py-4 border-b border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => toggleReportSort('type')}>
-                      النوع {reportSort.key === 'type' && (reportSort.dir === 'asc' ? '↑' : '↓')}
-                    </th>
-                    <th className="px-6 py-4 border-b border-slate-100">الزيارة المرتبطة</th>
-                    <th className="px-6 py-4 border-b border-slate-100">الإجراءات</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {sortedReports.map((r: any) => {
-                    const associatedVisit = patientVisits.find(v => v.id === r.visitId);
-                    return (
-                      <tr key={r.id} className="hover:bg-slate-50/50 transition-colors text-center">
-                        <td className="px-6 py-4 text-xs text-slate-500 font-bold">{dayjs(r.createdAt).format('DD MMM YYYY')}</td>
-                        <td className="px-6 py-4 font-bold text-sm text-slate-800 text-right">{r.title}</td>
-                        <td className="px-6 py-4">
-                          <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${
+            {fileViewMode === 'gallery' ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                {sortedReports.map((r: any, idx: number) => {
+                  const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(r.filename);
+                  return (
+                    <div 
+                      key={r.id} 
+                      className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all group flex flex-col text-right cursor-pointer"
+                      onClick={() => {
+                        setLightboxIndex(idx);
+                        setLightboxScale(1);
+                        setLightboxRotation(0);
+                      }}
+                    >
+                      {/* Thumbnail Container */}
+                      <div className="aspect-square bg-slate-100 relative flex items-center justify-center overflow-hidden border-b border-slate-100">
+                        {isImage ? (
+                          <img 
+                            src={`/uploads/${r.filename}`} 
+                            alt={r.title}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-350"
+                            onError={(e: any) => {
+                              e.target.style.display = 'none';
+                              e.target.nextSibling.style.display = 'flex';
+                            }}
+                          />
+                        ) : null}
+                        <div 
+                          className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-1 p-3"
+                          style={{ display: isImage ? 'none' : 'flex' }}
+                        >
+                          <FileText size={32} className="text-blue-500/85 group-hover:scale-110 transition-transform" />
+                          <span className="text-[10px] font-bold text-slate-500 text-center line-clamp-1">{r.filename.split('.').pop()?.toUpperCase()}</span>
+                        </div>
+                        {/* Hover Overlay */}
+                        <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white font-black text-xs gap-1">
+                          🔍 تكبير واستعراض
+                        </div>
+                      </div>
+                      
+                      {/* Details */}
+                      <div className="p-3 flex-1 flex flex-col justify-between">
+                        <div>
+                          <p className="text-xs font-black text-slate-800 line-clamp-2 min-h-[32px] leading-tight mb-1">{r.title}</p>
+                          <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded inline-block ${
                             r.type === 'prescription' ? 'bg-amber-100 text-amber-700' : 
                             r.type === 'report' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
                           }`}>
                             {r.type === 'prescription' ? 'روشتة' : r.type === 'report' ? 'تقرير' : 'أخرى'}
                           </span>
-                        </td>
-                        <td className="px-6 py-4 text-xs">
-                          {associatedVisit ? (
-                            <div className="flex flex-col items-center">
-                              <span className="font-bold text-slate-600 italic">كشف {dayjs(associatedVisit.date).format('DD/MM')}</span>
-                              <span className="text-[9px] text-slate-400">د. {doctors.find((d: any) => d.id === associatedVisit.doctorId)?.name}</span>
-                            </div>
-                          ) : <span className="text-slate-300">---</span>}
-                        </td>
-                        <td className="px-6 py-4">
-                           <a 
-                            href={`/uploads/${r.filename}`} target="_blank" rel="noreferrer"
-                            className="inline-block bg-slate-800 text-white px-4 py-1.5 rounded-lg text-[10px] font-black uppercase hover:bg-blue-600 transition-all shadow-sm"
-                          >
-                            فتح الملف
-                          </a>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {reports.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="py-20 text-center text-slate-300 italic text-sm">لا يوجد ملفات طبية حالياً</td>
+                        </div>
+                        <div className="text-[9px] text-slate-400 font-bold mt-2 pt-2 border-t border-slate-50">
+                          {dayjs(r.createdAt).format('DD MMM YYYY')}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {sortedReports.length === 0 && (
+                  <div className="col-span-full py-20 text-center text-slate-300 italic text-sm">لا توجد ملفات مرفوعة تناسب هذا التصنيف حالياً.</div>
+                )}
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-100 rounded-xl">
+                <table className="w-full text-right border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest text-center">
+                      <th className="px-6 py-4 border-b border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => toggleReportSort('createdAt')}>
+                        التاريخ {reportSort.key === 'createdAt' && (reportSort.dir === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th className="px-6 py-4 border-b border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors text-right" onClick={() => toggleReportSort('title')}>
+                        العنوان {reportSort.key === 'title' && (reportSort.dir === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th className="px-6 py-4 border-b border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => toggleReportSort('type')}>
+                        النوع {reportSort.key === 'type' && (reportSort.dir === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th className="px-6 py-4 border-b border-slate-100">الزيارة المرتبطة</th>
+                      <th className="px-6 py-4 border-b border-slate-100">الإجراءات</th>
                     </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {sortedReports.map((r: any) => {
+                      const associatedVisit = patientVisits.find(v => v.id === r.visitId);
+                      return (
+                        <tr key={r.id} className="hover:bg-slate-50/50 transition-colors text-center">
+                          <td className="px-6 py-4 text-xs text-slate-500 font-bold">{dayjs(r.createdAt).format('DD MMM YYYY')}</td>
+                          <td className="px-6 py-4 font-bold text-sm text-slate-800 text-right">{r.title}</td>
+                          <td className="px-6 py-4">
+                            <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${
+                              r.type === 'prescription' ? 'bg-amber-100 text-amber-700' : 
+                              r.type === 'report' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                            }`}>
+                              {r.type === 'prescription' ? 'روشتة' : r.type === 'report' ? 'تقرير' : 'أخرى'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-xs">
+                            {associatedVisit ? (
+                              <div className="flex flex-col items-center">
+                                <span className="font-bold text-slate-600 italic">كشف {dayjs(associatedVisit.date).format('DD/MM')}</span>
+                                <span className="text-[9px] text-slate-400">د. {doctors.find((d: any) => d.id === associatedVisit.doctorId)?.name}</span>
+                              </div>
+                            ) : <span className="text-slate-300">---</span>}
+                          </td>
+                          <td className="px-6 py-4">
+                             <a 
+                              href={`/uploads/${r.filename}`} target="_blank" rel="noreferrer"
+                              className="inline-block bg-slate-800 text-white px-4 py-1.5 rounded-lg text-[10px] font-black uppercase hover:bg-blue-600 transition-all shadow-sm"
+                            >
+                              فتح الملف
+                            </a>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {reports.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="py-20 text-center text-slate-300 italic text-sm">لا يوجد ملفات طبية حالياً</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
@@ -4762,6 +5111,182 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
       </div>
 
       <AnimatePresence>
+        {showQuickVitalsModal && (
+          <QuickVitalsModal 
+            onClose={() => setShowQuickVitalsModal(false)}
+            doctors={doctors}
+            onSubmit={async (data: any) => {
+              const newVisitObj = {
+                patientId,
+                doctorId: data.doctorId,
+                date: new Date().toISOString(),
+                serviceType: "فحص سريع وعلامات حيوية",
+                basePrice: 0,
+                cost: 0,
+                doctorEarnings: 0,
+                clinicEarnings: 0,
+                isPaid: true,
+                status: 'completed' as const,
+                notes: data.notes || "تم تسجيل العلامات الحيوية السريعة بنجاح.",
+                vitals: {
+                  temperature: data.temperature || undefined,
+                  bloodPressure: data.bloodPressure || undefined,
+                  pulse: data.pulse || undefined,
+                  weight: data.weight || undefined,
+                }
+              };
+              await api.createVisit({ ...newVisitObj, branch: selectedBranch });
+              await loadProfile();
+              setShowQuickVitalsModal(false);
+            }}
+          />
+        )}
+
+        {/* Fullscreen Lightbox Gallery Modal */}
+        {lightboxIndex !== null && sortedReports[lightboxIndex] && (
+          <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-sm z-[200] flex flex-col text-right select-none animate-in fade-in duration-200">
+            {/* Top Bar info & Operations */}
+            <div className="bg-slate-900/60 p-4 border-b border-white/10 flex items-center justify-between text-white">
+              <button 
+                onClick={() => setLightboxIndex(null)}
+                className="bg-white/15 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-all text-white font-black hover:scale-105 text-xs"
+              >
+                ✕ إغلاق
+              </button>
+              
+              <div className="text-center">
+                <h4 className="text-sm font-black tracking-wide text-white">{sortedReports[lightboxIndex].title}</h4>
+                <p className="text-[10px] text-slate-350 font-bold mt-0.5" dir="rtl">
+                  ملف {lightboxIndex + 1} من {sortedReports.length} | تاريخ الرفع: {dayjs(sortedReports[lightboxIndex].createdAt).format('DD/MM/YYYY')}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <a 
+                  href={`/uploads/${sortedReports[lightboxIndex].filename}`} 
+                  target="_blank" 
+                  rel="noreferrer"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-md"
+                >
+                  فتح الأصلي ↗
+                </a>
+              </div>
+            </div>
+
+            {/* Active Image Canvas with Zoom / Rotate */}
+            <div className="flex-1 overflow-hidden relative flex items-center justify-center p-6">
+              {/* Left Navigation */}
+              {lightboxIndex > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLightboxIndex(lightboxIndex - 1);
+                    setLightboxScale(1);
+                    setLightboxRotation(0);
+                  }}
+                  className="absolute left-6 top-1/2 -translate-y-1/2 size-12 rounded-full bg-white/10 border border-white/10 text-white flex items-center justify-center hover:bg-white/20 transition-all z-10 hover:scale-110 active:scale-95"
+                  title="السابق"
+                >
+                  <ChevronRight className="rotate-180" size={24} />
+                </button>
+              )}
+
+              {/* Centered Image content */}
+              <div className="max-w-4xl max-h-[70vh] flex items-center justify-center transition-all duration-300">
+                {/\.(jpg|jpeg|png|gif|webp)$/i.test(sortedReports[lightboxIndex].filename) ? (
+                  <motion.img
+                    key={sortedReports[lightboxIndex].id}
+                    src={`/uploads/${sortedReports[lightboxIndex].filename}`}
+                    alt={sortedReports[lightboxIndex].title}
+                    referrerPolicy="no-referrer"
+                    style={{
+                      transform: `scale(${lightboxScale}) rotate(${lightboxRotation}deg)`,
+                    }}
+                    className="max-w-full max-h-[70vh] object-contain rounded-lg shadow-2xl transition-transform"
+                  />
+                ) : (
+                  <div className="bg-slate-900 border border-white/10 rounded-2xl p-10 flex flex-col items-center justify-center gap-4 text-center max-w-sm">
+                    <FileText size={48} className="text-blue-400" />
+                    <div>
+                      <p className="text-sm font-bold text-white">{sortedReports[lightboxIndex].title}</p>
+                      <p className="text-xs text-slate-400 mt-1">هذا الملف ليس صورة مباشرة أو تم رفعه كـ PDF/Document.</p>
+                    </div>
+                    <a 
+                      href={`/uploads/${sortedReports[lightboxIndex].filename}`} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="bg-white text-slate-900 hover:bg-slate-100 px-4 py-2 rounded-lg text-xs font-black transition-all"
+                    >
+                      تنزيل أو استعراض المستند بالكامل
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              {/* Right Navigation */}
+              {lightboxIndex < sortedReports.length - 1 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLightboxIndex(lightboxIndex + 1);
+                    setLightboxScale(1);
+                    setLightboxRotation(0);
+                  }}
+                  className="absolute right-6 top-1/2 -translate-y-1/2 size-12 rounded-full bg-white/10 border border-white/10 text-white flex items-center justify-center hover:bg-white/20 transition-all z-10 hover:scale-110 active:scale-95"
+                  title="التالي"
+                >
+                  <ChevronRight size={24} />
+                </button>
+              )}
+            </div>
+
+            {/* Lightbox Toolbar Operations */}
+            <div className="bg-slate-900/80 p-4 border-t border-white/10 flex items-center justify-center gap-4 text-white">
+              <button
+                type="button"
+                onClick={() => setLightboxScale(s => Math.max(0.5, s - 0.25))}
+                className="bg-white/10 hover:bg-white/25 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+                title="تصغير"
+              >
+                🔎- تصغير
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightboxScale(1)}
+                className="bg-white/10 hover:bg-white/25 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+                title="إعادة التعيين"
+              >
+                إعادة ضبط الحجم
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightboxScale(s => Math.min(3, s + 0.25))}
+                className="bg-white/10 hover:bg-white/25 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+                title="تكبير"
+              >
+                🔎+ تكبير
+              </button>
+              <div className="h-4 w-[1px] bg-white/20" />
+              <button
+                type="button"
+                onClick={() => setLightboxRotation(r => r - 90)}
+                className="bg-white/10 hover:bg-white/25 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+                title="تدوير لليسار"
+              >
+                ↺ تدوير
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightboxRotation(r => r + 90)}
+                className="bg-white/10 hover:bg-white/25 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+                title="تدوير لليمين"
+              >
+                ↻ تدوير
+              </button>
+            </div>
+          </div>
+        )}
+
         {isAddingVisit && (
           <VisitModal 
             onClose={() => setIsAddingVisit(false)} 
@@ -4829,6 +5354,7 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
             doctors={doctors}
             patients={[]} // Not needed when initialPatientId is provided
             initialPatientId={patientId}
+            appointments={appointments}
             getDoctorLoad={(docId: string, date: string) => calculateDoctorLoad(docId, date)}
             selectedBranch={selectedBranch}
             currentUser={currentUser}
@@ -4847,13 +5373,33 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
             appointment={selectedAppointmentToComplete} 
             doctors={doctors}
             visits={patientVisits}
-            onSubmit={async (data: any) => {
+            onSubmit={async (data: any, files?: any) => {
               const res = await api.createVisit({
                 ...data,
                 patientId: selectedAppointmentToComplete.patientId,
                 status: 'completed',
                 branch: selectedBranch
               });
+              if (res && files) {
+                if (files.attachmentFile) {
+                  await api.uploadReport(
+                    selectedAppointmentToComplete.patientId,
+                    files.attachmentFile,
+                    files.attachmentTitle || "مرفق كشف",
+                    'other',
+                    res.id
+                  );
+                }
+                if (files.prescriptionFile) {
+                  await api.uploadReport(
+                    selectedAppointmentToComplete.patientId,
+                    files.prescriptionFile,
+                    files.prescriptionTitle || "صورة الروشتة المرفقة",
+                    'prescription',
+                    res.id
+                  );
+                }
+              }
               await api.updateAppointment(selectedAppointmentToComplete.id, {
                 status: 'completed',
                 arrivalTime: data.arrivalTime,
@@ -4926,6 +5472,15 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
               setPrintMedicalReportVisit(v);
               setPrintConfirmVisit(null);
             }}
+          />
+        )}
+
+        {showPrintSummary && (
+          <PrintPatientSummaryModal 
+            onClose={() => setShowPrintSummary(false)}
+            patient={patient}
+            visits={patientVisits}
+            doctors={doctors}
           />
         )}
       </AnimatePresence>
@@ -6071,6 +6626,238 @@ function PrintMedicalReportModal({ onClose, visit, patient, doctor }: { onClose:
   );
 }
 
+function PrintPatientSummaryModal({ onClose, patient, visits, doctors }: { onClose: () => void, patient: any, visits: any[], doctors: any[] }) {
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const sortedVisits = useMemo(() => {
+    return [...visits].sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [visits]);
+
+  const last3Visits = useMemo(() => {
+    return sortedVisits.slice(0, 3);
+  }, [sortedVisits]);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-[2px] overflow-y-auto">
+      <div className="absolute inset-0 cursor-pointer" onClick={onClose} />
+      
+      <style dangerouslySetInnerHTML={{__html: `
+        @media print {
+          body * {
+            visibility: hidden;
+          }
+          #printable-patient-summary, #printable-patient-summary * {
+            visibility: visible;
+          }
+          #printable-patient-summary {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: auto;
+            background: white !important;
+            color: black !important;
+            direction: rtl;
+            padding: 20px !important;
+            box-shadow: none !important;
+            border: none !important;
+          }
+          .no-print {
+            display: none !important;
+          }
+        }
+      `}} />
+
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.98, y: 15 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, y: 15 }}
+        className="relative bg-slate-900 w-full max-w-6xl rounded-2xl overflow-hidden shadow-2xl border border-slate-800 flex flex-col xl:flex-row max-h-[92vh] z-10"
+      >
+        {/* Print settings controller (Left side on desktop / Top on mobile) */}
+        <div className="p-6 bg-slate-950 border-b xl:border-b-0 xl:border-e border-slate-800 text-right w-full xl:w-80 flex flex-col justify-between shrink-0">
+          <div className="space-y-4 font-sans">
+            <div>
+              <span className="text-[9px] bg-indigo-500/10 text-indigo-400 font-bold px-2 py-0.5 rounded border border-indigo-500/20">تقرير الملف الموحد</span>
+              <h2 className="text-base font-black text-white mt-1.5 leading-relaxed">ملخص بيانات المريض والزيارات الأخيرة</h2>
+              <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">توليد ملخص شامل يحتوي على المعلومات الديموغرافية والسريرية للمريض وجرد لآخر 3 كشوفات معتمدة بزيارات المريض.</p>
+            </div>
+
+            <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-800 space-y-2 text-xs text-slate-300 text-right">
+              <p>اسم المريض: <span className="font-extrabold text-white">{patient?.name || '---'}</span></p>
+              <p>كود الحالة: <span className="font-bold text-white font-sans">{patient?.caseCode || '---'}</span></p>
+              <p>إجمالي الزيارات المسجلة: <span className="font-bold text-indigo-400">{visits.length} زيارات</span></p>
+            </div>
+            
+            <div className="text-[10px] text-amber-500 bg-amber-500/5 p-3 rounded-lg border border-amber-500/10 leading-relaxed font-bold">
+              💡 نصيحة الطباعة: تأكد من تفعيل خيار خلفيات الرسومات (Background Graphics) للحصول على ألوان ترويسة وهوية العيادة الملونة على الورقة المطبوعة.
+            </div>
+          </div>
+
+          <div className="pt-6 space-y-2 font-sans">
+            <button 
+              onClick={handlePrint}
+              className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-indigo-950/20 text-xs"
+            >
+              <Printer size={14} />
+              <span>طباعة ملخص الملف الموحد 🖨️</span>
+            </button>
+            <button 
+              onClick={onClose}
+              className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-extrabold rounded-lg transition-all text-xs"
+            >
+              إلغاء وإغلاق
+            </button>
+          </div>
+        </div>
+
+        {/* Paper space to preview printable page */}
+        <div className="flex-1 bg-slate-800 p-4 xl:p-8 overflow-y-auto text-right flex justify-center">
+          {/* Printable container with printable paper styles */}
+          <div id="printable-patient-summary" className="w-[210mm] min-h-[297mm] bg-white p-[15mm] text-slate-800 flex flex-col justify-between shadow-lg text-right relative font-sans border-t-8 border-indigo-600">
+            <div>
+              {/* Header */}
+              <div className="flex justify-between items-start border-b-2 border-slate-100 pb-3">
+                <div className="text-right">
+                  <h1 className="text-sm font-black text-slate-900">مجمع عيادات الشفاء الطبي الموحد</h1>
+                  <p className="text-[9px] text-slate-500 font-mono mt-0.5">Al-Shifa Integrated Medical Center</p>
+                  <p className="text-[8px] text-slate-400">ملخص ملف مريض معتمد | تاريخ التصدير: {dayjs().format('DD/MM/YYYY HH:mm')}</p>
+                </div>
+                <div className="text-left font-mono">
+                  <h2 className="text-xs font-black text-indigo-700">CLINIC SYSTEM</h2>
+                  <p className="text-[8px] text-slate-500 tracking-wide">Patient Information & Visit History</p>
+                  <p className="text-[7px] text-slate-400">Branch: {patient?.branch || 'المعادي'}</p>
+                </div>
+              </div>
+
+              {/* Title Section */}
+              <div className="text-center my-5 bg-indigo-50/40 py-2.5 rounded-lg border border-indigo-100/40">
+                <h2 className="text-xs font-black text-indigo-900 font-sans">ملخص البيانات الطبية والزيارات الأخيرة للمريض</h2>
+              </div>
+
+              {/* Basic Patient Info Grid */}
+              <div className="space-y-4">
+                <span className="text-[10px] font-black text-indigo-800 block border-r-4 border-indigo-600 pr-2 leading-none uppercase tracking-wider font-sans">البيانات الأساسية والديموغرافية (Demographic & Personal Info)</span>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100 text-[11px] font-sans">
+                  <div><span className="text-slate-400 font-bold block mb-0.5">اسم المريض</span> <span className="font-extrabold text-slate-900">{patient.name}</span></div>
+                  <div><span className="text-slate-400 font-bold block mb-0.5">كود الحالة</span> <span className="font-extrabold text-indigo-700 font-mono">#{patient.caseCode || '---'}</span></div>
+                  <div><span className="text-slate-400 font-bold block mb-0.5">رقم الهاتف</span> <span className="font-bold text-slate-800 font-mono">{patient.phone || '---'}</span></div>
+                  
+                  <div><span className="text-slate-400 font-bold block mb-0.5">العمر</span> <span className="font-bold text-slate-800">{patient.age ? `${patient.age} سنة` : 'غير محدد'}</span></div>
+                  <div><span className="text-slate-400 font-bold block mb-0.5">الجنس</span> <span className="font-bold text-slate-800">{patient.gender === 'male' ? 'ذكر' : patient.gender === 'female' ? 'أنثى' : 'غير محدد'}</span></div>
+                  <div><span className="text-slate-400 font-bold block mb-0.5">الجنسية</span> <span className="font-bold text-slate-800">{patient.nationality || '---'}</span></div>
+                  
+                  <div><span className="text-slate-400 font-bold block mb-0.5">الرقم القومي / الهوية</span> <span className="font-bold text-slate-800 font-mono">{patient.nationalId || '---'}</span></div>
+                  <div><span className="text-slate-400 font-bold block mb-0.5">رقم جواز السفر</span> <span className="font-bold text-slate-800 font-mono">{patient.passportNumber || '---'}</span></div>
+                  <div><span className="text-slate-400 font-bold block mb-0.5">رقم المفوضية</span> <span className="font-bold text-slate-800 font-mono">{patient.commissionNumber || '---'}</span></div>
+
+                  <div className="col-span-1 md:col-span-3 pt-3 border-t border-slate-200/50 flex justify-between text-[10px] text-slate-500 font-bold">
+                    <span>تاريخ الميلاد: <strong className="text-slate-700 font-mono">{patient.dateOfBirth ? dayjs(patient.dateOfBirth).format('YYYY/MM/DD') : '---'}</strong></span>
+                    <span>تاريخ التسجيل بالعيادة: <strong className="text-slate-700 font-mono">{dayjs(patient.createdAt).format('YYYY/MM/DD')}</strong></span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Last 3 Visits History Section */}
+              <div className="space-y-3 mt-6">
+                <span className="text-[10px] font-black text-indigo-800 block border-r-4 border-indigo-600 pr-2 leading-none uppercase tracking-wider font-sans">سجل آخر 3 زيارات وكشوفات طبية بالعيادة (Last 3 Visits Details)</span>
+                
+                {last3Visits.length > 0 ? (
+                  <div className="space-y-4">
+                    {last3Visits.map((visit: any, index: number) => {
+                      const doc = doctors.find((d: any) => d.id === visit.doctorId);
+                      return (
+                        <div key={visit.id} className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm font-sans">
+                          {/* Visit Header */}
+                          <div className="bg-slate-50 px-3.5 py-2 border-b border-slate-200 flex justify-between items-center text-[11px] font-bold">
+                            <div className="flex items-center gap-2">
+                              <span className="font-black bg-indigo-100 text-indigo-850 size-5 rounded-full flex items-center justify-center text-[10px] font-mono">{index + 1}</span>
+                              <span className="text-slate-800">زيارة بتاريخ: <strong className="font-extrabold">{dayjs(visit.date).format('YYYY/MM/DD - HH:mm')}</strong></span>
+                            </div>
+                            <div className="text-slate-600">
+                              <span>الطبيب المعالج: <strong>د. {doc?.name || '---'}</strong> ({doc?.specialty || 'تخصص عام'})</span>
+                            </div>
+                          </div>
+
+                          {/* Visit Details */}
+                          <div className="p-3.5 text-xs space-y-2.5">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
+                              <div>
+                                <span className="text-slate-400 font-bold block text-[9.5px]">بند الكشف والخدمة</span>
+                                <span className="font-extrabold text-slate-800">{visit.serviceType || 'كشف طبي'}</span>
+                              </div>
+                              {visit.notes && (
+                                <div>
+                                  <span className="text-slate-400 font-bold block text-[9.5px]">الشكوى / ملاحظات سريرية</span>
+                                  <p className="font-medium text-slate-700 whitespace-pre-line">{visit.notes}</p>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Vitals indicators if exist */}
+                            {visit.vitals && (visit.vitals.temperature || visit.vitals.bloodPressure || visit.vitals.pulse) && (
+                              <div className="flex gap-4 p-2 bg-slate-50 rounded-lg text-[9.5px] text-slate-600 font-sans border border-slate-100/60 w-fit">
+                                {visit.vitals.temperature && <div>🌡️ الحرارة: <strong>{visit.vitals.temperature} °C</strong></div>}
+                                {visit.vitals.bloodPressure && <div>🩺 ضغط الدم: <strong>{visit.vitals.bloodPressure}</strong></div>}
+                                {visit.vitals.pulse && <div>💓 النبض: <strong>{visit.vitals.pulse} bpm</strong></div>}
+                                {visit.vitals.weight && <div>⚖️ الوزن: <strong>{visit.vitals.weight} كجم</strong></div>}
+                              </div>
+                            )}
+
+                            {visit.diagnosis && (
+                              <div className="p-2.5 bg-emerald-50/30 rounded-lg border border-emerald-100/60 text-[11px]">
+                                <span className="font-black text-emerald-850 block text-[9.5px] mb-0.5">التشخيص الطبي النهائي (Diagnosis)</span>
+                                <p className="font-bold text-slate-800">{visit.diagnosis}</p>
+                              </div>
+                            )}
+
+                            {/* Medications */}
+                            {visit.prescriptions && Array.isArray(visit.prescriptions) && visit.prescriptions.length > 0 && (
+                              <div className="space-y-1">
+                                <span className="text-slate-400 font-bold block text-[9.5px]">الوصفة الدوائية الممنوحة (Rx)</span>
+                                <div className="bg-slate-50/50 rounded-lg border border-slate-100 p-2.5">
+                                  <ul className="list-disc list-inside space-y-1.5 text-[10.5px] text-slate-800 font-sans">
+                                    {visit.prescriptions.map((p: any, pIdx: number) => (
+                                      <li key={p.id || pIdx} className="font-bold">
+                                        <span className="text-indigo-900">{p.name}</span> - {p.quantity || '1 حبة'} ({p.duration || '---'})
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-400 text-xs italic font-sans">
+                    لم تسجل زيارات طبية سابقة لهذا المريض في السجلات الطبية.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Print Footer / Validation Signatures */}
+            <div className="border-t border-slate-200 pt-3 mt-8 flex justify-between items-end font-sans">
+              <p className="text-[7.5px] text-slate-400 max-w-sm font-bold leading-relaxed">
+                * مستند رسمي مطبوع ومصدق إلكترونياً من نظام العيادات الشامل. مخصص لعرض البيانات السريرية في تاريخ صدوره ولا يعوض التحديث الدوري لملفات المرضى.
+              </p>
+              <div className="text-center w-[150px] border-t border-slate-300 pt-1.5 font-sans">
+                <span className="text-[8px] font-black text-slate-400 block tracking-wide">المسؤول الطبي والاعتماد</span>
+                <span className="text-[9.5px] font-black text-slate-800 block mt-1">توقيع الإدارة الطبية بالمركز</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 function PrintConfirmModal({ onClose, visit, onPrintPrescription, onPrintReport }: any) {
   return (
     <div 
@@ -6418,6 +7205,10 @@ function CompleteAppointmentModal({ onClose, appointment, doctors, visits, onSub
 
   const [prescriptions, setPrescriptions] = useState<Array<{ id: string; name: string; quantity: string; duration: string }>>([]);
   const [tempPrescription, setTempPrescription] = useState({ name: '', quantity: '', duration: '' });
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  const [attachmentTitle, setAttachmentTitle] = useState("");
+  const [prescriptionFile, setPrescriptionFile] = useState<File | null>(null);
+  const [prescriptionTitle, setPrescriptionTitle] = useState("");
 
   const getDoctorVisitsCountOnDay = (doctorId: string, dateStr: string) => {
     const dStr = dateStr.split('T')[0];
@@ -6484,6 +7275,11 @@ function CompleteAppointmentModal({ onClose, appointment, doctors, visits, onSub
             followUpDate: formData.followUpRequired ? formData.followUpDate : undefined,
             followUpNotes: formData.followUpRequired ? formData.followUpNotes : undefined,
             dietInstructions: formData.dietInstructions
+          }, {
+            attachmentFile,
+            attachmentTitle: attachmentTitle || "مرفق طبي إضافي",
+            prescriptionFile,
+            prescriptionTitle: prescriptionTitle || "صورة الروشتة المرفقة"
           });
         }} className="p-6 overflow-y-auto space-y-4 text-right" dir="rtl">
           
@@ -6837,6 +7633,95 @@ function CompleteAppointmentModal({ onClose, appointment, doctors, visits, onSub
             )}
           </div>
 
+          {/* File Uploads Section (الروشتة والمرفقات) */}
+          <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/40 space-y-4 text-right">
+            <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 border-b border-slate-100 pb-2">
+              <span className="text-teal-600">📁</span> مرفقات الكشف والروشتة المصورة (اختياري)
+            </h4>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Prescription File Upload */}
+              <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2">
+                <span className="text-[10px] font-black text-slate-500 block">📄 روشتة الكشف المرفقة</span>
+                <div className="space-y-1.5">
+                  <input 
+                    type="text" 
+                    className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold" 
+                    placeholder="عنوان الروشتة (مثال: روشتة دواء الكشف)" 
+                    value={prescriptionTitle} 
+                    onChange={(e) => setPrescriptionTitle(e.target.value)} 
+                  />
+                  
+                  <div className="border border-dashed border-teal-200 hover:border-teal-400 rounded-lg p-3 text-center bg-teal-50/10 hover:bg-teal-50/20 transition-all cursor-pointer relative">
+                    <input 
+                      type="file" 
+                      className="absolute inset-0 opacity-0 cursor-pointer" 
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null;
+                        setPrescriptionFile(file);
+                        if (file && !prescriptionTitle) {
+                          setPrescriptionTitle(`روشتة - ${file.name.substring(0, 15)}`);
+                        }
+                      }} 
+                    />
+                    <div className="text-xs font-bold text-teal-700 truncate">
+                      {prescriptionFile ? `✓ ${prescriptionFile.name}` : 'اختر صورة/ملف الروشتة ورأس الطباعة'}
+                    </div>
+                  </div>
+                  {prescriptionFile && (
+                    <button 
+                      type="button" 
+                      onClick={() => { setPrescriptionFile(null); setPrescriptionTitle(""); }} 
+                      className="text-[9px] font-black hover:underline text-red-500"
+                    >
+                      حذف الملف المحدد
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Other medical attachments */}
+              <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2">
+                <span className="text-[10px] font-black text-slate-500 block">📎 مرفق طبي إضافي (أشعة / تحاليل)</span>
+                <div className="space-y-1.5">
+                  <input 
+                    type="text" 
+                    className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold" 
+                    placeholder="عنوان المرفق (مثال: أشعة سينية، تقرير معمل)" 
+                    value={attachmentTitle} 
+                    onChange={(e) => setAttachmentTitle(e.target.value)} 
+                  />
+                  
+                  <div className="border border-dashed border-sky-200 hover:border-sky-400 rounded-lg p-3 text-center bg-sky-50/10 hover:bg-sky-50/20 transition-all cursor-pointer relative">
+                    <input 
+                      type="file" 
+                      className="absolute inset-0 opacity-0 cursor-pointer" 
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null;
+                        setAttachmentFile(file);
+                        if (file && !attachmentTitle) {
+                          setAttachmentTitle(`مرفق - ${file.name.substring(0, 15)}`);
+                        }
+                      }} 
+                    />
+                    <div className="text-xs font-bold text-sky-700 truncate">
+                      {attachmentFile ? `✓ ${attachmentFile.name}` : 'اختر ملف المرفق الإضافي أو التقرير'}
+                    </div>
+                  </div>
+                  {attachmentFile && (
+                    <button 
+                      type="button" 
+                      onClick={() => { setAttachmentFile(null); setAttachmentTitle(""); }} 
+                      className="text-[9px] font-black hover:underline text-red-500"
+                    >
+                      حذف الملف المحدد
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Real-time Math Summary Card */}
           <div className="bg-teal-50/50 p-4 border border-teal-100 rounded-xl space-y-3">
             <h4 className="text-xs font-black text-teal-800 flex items-center gap-2">
@@ -6886,6 +7771,143 @@ function CompleteAppointmentModal({ onClose, appointment, doctors, visits, onSub
           <div className="pt-2 flex gap-3">
             <button type="submit" className="flex-1 py-3 bg-teal-600 hover:bg-teal-700 text-white font-black rounded-lg transition-all shadow-lg shadow-teal-900/10 text-xs">إتمام وتأصيل الحسابات</button>
             <button type="button" onClick={onClose} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-lg transition-all text-xs">إلغاء</button>
+          </div>
+        </form>
+      </motion.div>
+    </div>
+  );
+}
+
+function QuickVitalsModal({ onClose, doctors, onSubmit }: { onClose: () => void, doctors: any[], onSubmit: (data: any) => void }) {
+  const [doctorId, setDoctorId] = useState(doctors[0]?.id || "");
+  const [temperature, setTemperature] = useState("");
+  const [bloodPressure, setBloodPressure] = useState("");
+  const [pulse, setPulse] = useState("");
+  const [weight, setWeight] = useState("");
+  const [notes, setNotes] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!doctorId) {
+      alert("الرجاء اختيار الطبيب القائم بالفحص");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await onSubmit({ doctorId, temperature, bloodPressure, pulse, weight, notes });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl border border-slate-100 text-right animate-in zoom-in-95 duration-200"
+      >
+        <div className="bg-teal-600 text-white p-4 flex justify-between items-center">
+          <button type="button" onClick={onClose} className="text-white/80 hover:text-white font-bold">✕</button>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-black">🏥 تسجيل علامات حيوية وفحص سريع</span>
+          </div>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <div className="space-y-1">
+            <label className="text-[11px] font-black text-slate-500 block">الطبيب القائم بالفحص *</label>
+            <select
+              value={doctorId}
+              onChange={(e) => setDoctorId(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700"
+              required
+            >
+              <option value="">-- اختر الطبيب --</option>
+              {doctors.map((d: any) => (
+                <option key={d.id} value={d.id}>د. {d.name} ({d.specialty})</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-[11px] font-black text-slate-500 block">درجة الحرارة (°C)</label>
+              <input
+                type="text"
+                placeholder="مثال: 37.2"
+                value={temperature}
+                onChange={(e) => setTemperature(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700 text-center animate-pulse"
+              />
+            </div>
+            
+            <div className="space-y-1">
+              <label className="text-[11px] font-black text-slate-500 block">ضغط الدم (mmHg)</label>
+              <input
+                type="text"
+                placeholder="مثال: 120/80"
+                value={bloodPressure}
+                onChange={(e) => setBloodPressure(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700 text-center"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-[11px] font-black text-slate-500 block">سرعة النبض (bpm)</label>
+              <input
+                type="text"
+                placeholder="مثال: 80"
+                value={pulse}
+                onChange={(e) => setPulse(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700 text-center"
+              />
+            </div>
+            
+            <div className="space-y-1">
+              <label className="text-[11px] font-black text-slate-500 block">الوزن (kg)</label>
+              <input
+                type="text"
+                placeholder="مثال: 72"
+                value={weight}
+                onChange={(e) => setWeight(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700 text-center"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[11px] font-black text-slate-500 block">ملاحظات الفحص السريعة</label>
+            <textarea
+              rows={2}
+              placeholder="اكتب أي ملاحظة أو شكوى سريعة للمريض هنا..."
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700 placeholder:text-slate-400"
+            />
+          </div>
+
+          <div className="flex gap-2.5 pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-1/3 bg-slate-100 hover:bg-slate-200 text-slate-750 px-4 py-2 rounded-lg text-xs font-bold transition-all border border-slate-200"
+            >
+              إلغاء
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-2/3 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-xs font-black transition-all shadow-md shadow-teal-900/10 flex items-center justify-center gap-1"
+            >
+              {isSubmitting ? 'جاري الحفظ...' : 'تأكيد الحفظ بالملف'}
+            </button>
           </div>
         </form>
       </motion.div>
@@ -10166,6 +11188,7 @@ function AppointmentsView({ appointments, doctors, patients, onRefresh, onSelect
             onClose={() => setIsAdding(false)} 
             doctors={doctors}
             patients={patients}
+            appointments={appointments}
             getDoctorLoad={getDoctorLoad}
             selectedBranch={selectedBranch}
             currentUser={currentUser}
@@ -10491,7 +11514,7 @@ function DailyReportPrintModal({ onClose, date, appointments, doctors, patients 
   );
 }
 
-function AppointmentModal({ onClose, onSubmit, doctors, patients, getDoctorLoad, initialPatientId, selectedBranch, currentUser }: any) {
+function AppointmentModal({ onClose, onSubmit, doctors, patients, getDoctorLoad, initialPatientId, selectedBranch, currentUser, appointments = [] }: any) {
   const [formData, setFormData] = useState({
     patientId: initialPatientId || "",
     doctorId: "",
@@ -10519,6 +11542,65 @@ function AppointmentModal({ onClose, onSubmit, doctors, patients, getDoctorLoad,
 
   const currentLoad = formData.doctorId ? getDoctorLoad(formData.doctorId, formData.date) : 0;
   const isOverCapacity = selectedDoctor && selectedDoctor.maxPatientsPerDay && currentLoad >= selectedDoctor.maxPatientsPerDay;
+
+  // Generate recommended available time slots for the doctor using scheduling constraints
+  const availableSlots = useMemo(() => {
+    if (!selectedDoctor || !formData.date) return [];
+    
+    try {
+      const apptDate = dayjs(formData.date);
+      const dayOfWeek = apptDate.day();
+      const dateStr = apptDate.format("YYYY-MM-DD");
+      
+      const schedule = selectedDoctor.weeklySchedule || {};
+      const activeDays = schedule.activeDays || [0, 1, 2, 3, 4, 5, 6];
+      const startTimeStr = schedule.startTime || "09:00";
+      const endTimeStr = schedule.endTime || "17:00";
+      
+      // If the selected day of week is not a workday, return empty list
+      if (!activeDays.includes(dayOfWeek)) {
+        return [];
+      }
+      
+      const slots = [];
+      const [startHour, startMin] = startTimeStr.split(":").map(Number);
+      const [endHour, endMin] = endTimeStr.split(":").map(Number);
+      
+      let current = dayjs(dateStr).hour(startHour).minute(startMin);
+      const end = dayjs(dateStr).hour(endHour).minute(endMin);
+      
+      // Filter existing appointments for this doctor on selected day
+      const doctorDayAppts = (appointments || []).filter((app: any) => {
+        const isSameDoc = app.doctorId === selectedDoctor.id;
+        const isSameDay = dayjs(app.date).format("YYYY-MM-DD") === dateStr;
+        const isNotCancelled = app.status !== "cancelled";
+        return isSameDoc && isSameDay && isNotCancelled;
+      });
+      
+      // Prevent infinite loop if timestamps are corrupted
+      let securityCounter = 0;
+      while ((current.isBefore(end) || current.isSame(end)) && securityCounter < 50) {
+        securityCounter++;
+        const slotTimeStr = current.format("HH:mm");
+        const isBooked = doctorDayAppts.some((app: any) => {
+          return dayjs(app.date).format("HH:mm") === slotTimeStr;
+        });
+        
+        slots.push({
+          time: slotTimeStr,
+          isBooked,
+          dateTimeStr: `${dateStr}T${slotTimeStr}`,
+        });
+        
+        current = current.add(30, 'minute');
+      }
+      
+      return slots;
+    } catch (err) {
+      console.error("Error calculating availableSlots:", err);
+      return [];
+    }
+  }, [selectedDoctor, formData.date, appointments]);
 
   // Calculate schedule validation errors for the doctor's weeklySchedule
   let scheduleError = "";
@@ -10636,6 +11718,40 @@ function AppointmentModal({ onClose, onSubmit, doctors, patients, getDoctorLoad,
             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">التاريخ والوقت</label>
             <input required type="datetime-local" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.date} onChange={(e) => setFormData({...formData, date: e.target.value})} />
           </div>
+
+          {selectedDoctor && availableSlots.length > 0 && (
+            <div className="space-y-2 mt-2 bg-slate-50/50 p-4 border border-slate-150 rounded-xl">
+              <span className="text-[10px] font-black text-slate-500 block uppercase tracking-wide">
+                🕒 مواعيد الطبيب ومؤشرات الإتاحة لليوم ({dayjs(formData.date).format("YYYY-MM-DD")}):
+              </span>
+              <div className="grid grid-cols-4 gap-1.5 max-h-32 overflow-y-auto pr-1">
+                {availableSlots.map((slot: any) => {
+                  const isCurrent = dayjs(formData.date).format("HH:mm") === slot.time;
+                  return (
+                    <button
+                      key={slot.time}
+                      type="button"
+                      disabled={slot.isBooked}
+                      onClick={() => setFormData({ ...formData, date: slot.dateTimeStr })}
+                      className={`py-1.5 text-center text-xs font-black rounded-lg transition-all border ${
+                        slot.isBooked
+                          ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed line-through text-[10px] flex items-center justify-center gap-0.5'
+                          : isCurrent
+                          ? 'bg-blue-600 border-blue-700 text-white shadow-md scale-102 font-black'
+                          : 'bg-white border-slate-200 text-slate-700 hover:border-blue-400 hover:bg-blue-50/50'
+                      }`}
+                    >
+                      <span>{slot.time}</span>
+                      {slot.isBooked && <span className="text-[9px]">🚫</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[9px] text-slate-400 font-bold leading-none">
+                * انقر على أي موعد متاح لتعبئة التوقيت فورياً وتأكيد حجز الخانة المتاحة للطبيب المختار.
+              </p>
+            </div>
+          )}
 
           {selectedDoctor && (
             <div className="bg-blue-50/50 p-4 border border-blue-100 rounded-xl space-y-2 mt-2">

@@ -54,6 +54,8 @@ export default function QueuingView({
   selectedBranch 
 }: QueuingViewProps) {
   const [activeTab, setActiveTab] = useState<'caller' | 'tv' | 'reports' | 'followup'>('caller');
+  const [callerSubMode, setCallerSubMode] = useState<'doctor-station' | 'reception'>('doctor-station');
+  const [receptionSearch, setReceptionSearch] = useState<string>('');
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>('');
   const [smsFeedback, setSmsFeedback] = useState<{ [appId: string]: string }>({});
   
@@ -80,16 +82,30 @@ export default function QueuingView({
     });
   }, [appointments, selectedBranch]);
 
-  // Specific doctor's today's queue
+  // Specific doctor's today's queue (sorted by priority and then attendance/arrival times)
   const doctorQueue = useMemo(() => {
     if (!selectedDoctorId) return [];
     return todayApps
       .filter(app => app.doctorId === selectedDoctorId)
       .sort((a, b) => {
-        // Sort by priority (emergency first) then by time / arrivalTime
-        if (a.notes?.includes('طوارئ') && !b.notes?.includes('طوارئ')) return -1;
-        if (!a.notes?.includes('طوارئ') && b.notes?.includes('طوارئ')) return 1;
-        return (a.arrivalTime || a.time || '').localeCompare(b.arrivalTime || b.time || '');
+        // 1. Emergency first
+        const aEmerg = a.notes?.includes('طوارئ') || a.serviceType === 'طوارئ';
+        const bEmerg = b.notes?.includes('طوارئ') || b.serviceType === 'طوارئ';
+        if (aEmerg && !bEmerg) return -1;
+        if (!aEmerg && bEmerg) return 1;
+
+        // 2. Confirmed attendance (arrivalTime) first
+        const aArrived = !!a.arrivalTime;
+        const bArrived = !!b.arrivalTime;
+        if (aArrived && !bArrived) return -1;
+        if (!aArrived && bArrived) return 1;
+
+        // 3. Arrange chronologically by attendance time (if they arrived) or by scheduled appointment time (if they haven't)
+        if (aArrived && bArrived) {
+          return (a.arrivalTime || '').localeCompare(b.arrivalTime || '');
+        } else {
+          return (a.time || '').localeCompare(b.time || '');
+        }
       });
   }, [todayApps, selectedDoctorId]);
 
@@ -360,138 +376,286 @@ export default function QueuingView({
 
       {/* RENDER ACTIVE TAB */}
       {activeTab === 'caller' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          
-          {/* Right Column: Doctor Selector & Live Queue List */}
-          <div className="lg:col-span-8 space-y-6">
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div>
-                  <h2 className="text-sm font-black text-slate-800">الحالات المجدولة بعيادتك اليوم</h2>
-                  <p className="text-[10px] text-slate-400 font-bold">يمكنك إدارة أوقات التسجيل والنداء صوتياً مباشرً من غرفتك العيادية</p>
-                </div>
+        <div className="space-y-4">
+          {/* Sub-tabs switcher */}
+          <div className="flex bg-slate-100 p-1 rounded-xl w-fit gap-1 self-start">
+            <button
+              onClick={() => setCallerSubMode('doctor-station')}
+              className={`px-4 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 ${
+                callerSubMode === 'doctor-station'
+                  ? 'bg-blue-600 text-white shadow-md'
+                  : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200'
+              }`}
+            >
+              <Volume2 size={13} />
+              <span>محطة نداء الطبيب (عيادة محددة)</span>
+            </button>
+            <button
+              onClick={() => setCallerSubMode('reception')}
+              className={`px-4 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 ${
+                callerSubMode === 'reception'
+                  ? 'bg-blue-600 text-white shadow-md'
+                  : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200'
+              }`}
+            >
+              <UserCheck size={13} />
+              <span>مكتب التنسيق والاستقبال (إثبات حضور الحالات)</span>
+              {todayApps.filter(a => !a.arrivalTime).length > 0 && (
+                <span className="bg-amber-500 text-white text-[9px] font-black font-sans px-2 py-0.5 rounded-full animate-pulse">
+                  {todayApps.filter(a => !a.arrivalTime).length}
+                </span>
+              )}
+            </button>
+          </div>
 
-                <div className="w-full md:w-64">
-                  <label className="text-[9px] font-black text-slate-400 block mb-1">اختر العيادة / الطبيب المشرف</label>
-                  <select 
-                    value={selectedDoctorId} 
-                    onChange={(e) => setSelectedDoctorId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-black focus:ring-2 focus:ring-blue-500/10 text-right"
-                  >
-                    {activeDoctors.map(d => (
-                      <option key={d.id} value={d.id}>د. {d.name} ({d.specialty || 'ممارس عام'})</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            {/* Right Column: Doctor Selector & Live Queue List or Reception Desk */}
+            <div className="lg:col-span-8 space-y-6">
+              <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                
+                {callerSubMode === 'reception' ? (
+                  <div className="space-y-4">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                      <div>
+                        <h2 className="text-sm font-black text-slate-800">مكتب الاستقبال وإثبات الحضور للمرضى اليوم</h2>
+                        <p className="text-[10px] text-slate-400 font-bold">يرجى من موظف التنسيق تأكيد حضور المرضى في مقر مقر المركز بمجرد وصولهم لتجهيزهم في طابور الطبيب</p>
+                      </div>
+                      <div className="relative w-full md:w-72 bg-slate-50 border border-slate-200 rounded-lg py-1.5 px-3 text-xs flex items-center gap-1.5">
+                        <Search size={13} className="text-slate-400 mr-0.5" />
+                        <input
+                          type="text"
+                          placeholder="ابحث باسم المريض، كود الحالة، أو الهاتف..."
+                          className="bg-transparent focus:outline-none w-full text-slate-700 font-bold text-right"
+                          value={receptionSearch}
+                          onChange={(e) => setReceptionSearch(e.target.value)}
+                        />
+                      </div>
+                    </div>
 
-              {/* Status Queue table */}
-              <div className="border border-slate-150 rounded-xl overflow-hidden">
-                <table className="w-full text-right text-xs">
-                  <thead className="bg-slate-50 text-slate-500 font-black uppercase text-[9px] tracking-wider border-b border-slate-150">
-                    <tr>
-                      <th className="p-3">المريض</th>
-                      <th className="p-3">وقت الحجز</th>
-                      <th className="p-3">الوصول لمقر الاستقبال</th>
-                      <th className="p-3">رقم الاستدعاء</th>
-                      <th className="p-3">الموقف الحالي</th>
-                      <th className="p-3 text-center">النداء بالصوت</th>
-                      <th className="p-3 text-left">التوقيت السريري</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {doctorQueue.length > 0 ? (
-                      doctorQueue.map((item, idx) => {
-                        const pat = patients.find(p => p.id === item.patientId);
-                        const isPrimary = item.notes?.includes('طوارئ');
-                        
-                        return (
-                          <tr key={item.id} className={`hover:bg-slate-50/50 ${isPrimary ? 'bg-rose-50/20' : ''}`}>
-                            <td className="p-3">
-                              <div className="font-extrabold text-slate-800 flex items-center gap-1.5 justify-end">
-                                {isPrimary && <span className="bg-rose-100 text-rose-700 text-[8px] font-black px-1.5 py-0.5 rounded animate-pulse">حالة طارئة 🚨</span>}
-                                <span>{pat ? pat.name : 'مريض غير معرّف'}</span>
-                              </div>
-                              <div className="text-[9px] text-slate-400 font-mono mt-0.5">كود: {pat?.caseCode || 'N/A'} - تليفون: {pat?.phone || 'N/A'}</div>
-                            </td>
-                            
-                            <td className="p-3 font-mono text-slate-600 font-bold">{item.time || 'N/A'}</td>
-                            
-                            <td className="p-3">
-                              {item.arrivalTime ? (
-                                <span className="bg-slate-100 text-slate-700 font-semibold py-1 px-2 rounded font-mono">{item.arrivalTime}</span>
-                              ) : (
-                                <button 
-                                  onClick={() => updatePatientTime(item.id, 'arrival')}
-                                  className="text-slate-500 hover:text-blue-600 flex items-center gap-1 justify-end font-bold text-[10px]"
-                                >
-                                  <UserPlus size={12} />
-                                  <span>تسجيل وصول</span>
-                                </button>
-                              )}
-                            </td>
-
-                            <td className="p-3 font-extrabold font-mono text-indigo-600">A-{idx + 1}</td>
-
-                            <td className="p-3">
-                              {item.departureTime ? (
-                                <span className="text-slate-400 bg-slate-50 border border-slate-100 py-0.5 px-2 rounded-full font-bold">الحالة غادرت</span>
-                              ) : item.entryTime ? (
-                                <span className="text-emerald-700 bg-emerald-50 border border-emerald-100 py-0.5 px-2 rounded-full font-bold inline-flex items-center gap-1">
-                                  <span className="size-1.5 rounded-full bg-emerald-500 animate-ping" />
-                                  داخل العيادة الآن
-                                </span>
-                              ) : item.arrivalTime ? (
-                                <span className="text-amber-700 bg-amber-50 border border-amber-100 py-0.5 px-2 rounded-full font-bold">في الانتظار بالخارج</span>
-                              ) : (
-                                <span className="text-slate-400 italic">بانتظار الحضور للمركز</span>
-                              )}
-                            </td>
-
-                            <td className="p-3 text-center">
-                              <button 
-                                onClick={() => handleVocalCall(pat ? pat.name : 'الحالة')}
-                                className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 p-1.5 rounded-lg transition-transform hover:scale-105 inline-flex items-center gap-1 font-bold text-[10px]"
-                                title="استدعاء صوتي سريع"
-                              >
-                                <Volume2 size={13} />
-                                <span>استدعاء مباشر</span>
-                              </button>
-                            </td>
-
-                            <td className="p-3 text-left space-x-1 space-x-reverse">
-                              {!item.entryTime ? (
-                                <button 
-                                  disabled={!item.arrivalTime}
-                                  onClick={() => updatePatientTime(item.id, 'entry')}
-                                  className={`px-2 py-1 text-[10px] font-black rounded ${item.arrivalTime ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm' : 'bg-slate-150 text-slate-400 cursor-not-allowed'}`}
-                                >
-                                  دخول العيادة
-                                </button>
-                              ) : !item.departureTime ? (
-                                <button 
-                                  onClick={() => updatePatientTime(item.id, 'departure')}
-                                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 text-[10px] font-black rounded shadow-sm"
-                                >
-                                  إنهاء الفحص ومغادرة
-                                </button>
-                              ) : (
-                                <span className="text-slate-400 font-mono text-[10px]">منتهية بنجاح</span>
-                              )}
-                            </td>
+                    <div className="border border-slate-150 rounded-xl overflow-hidden">
+                      <table className="w-full text-right text-xs">
+                        <thead className="bg-slate-50 text-slate-500 font-black uppercase text-[9px] tracking-wider border-b border-slate-150">
+                          <tr>
+                            <th className="p-3">اسم المريض</th>
+                            <th className="p-3">الطبيب المعالج والعيادة</th>
+                            <th className="p-3">التوقيت المحجوز</th>
+                            <th className="p-3">تأكيد الحضور (مكتب الاستقبال)</th>
+                            <th className="p-3">الموقف بطابور النداء</th>
+                            <th className="p-3 text-left">الفرع</th>
                           </tr>
-                        );
-                      })
-                    ) : (
-                      <tr>
-                        <td colSpan={7} className="p-12 text-center text-slate-300 italic">لا توجد حجوزات مسجلة لهذه العيادة اليوم</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {(() => {
+                            const searchLower = receptionSearch.toLowerCase();
+                            const filteredTodayApps = todayApps.filter(app => {
+                              const pat = patients.find(p => p.id === app.patientId);
+                              const doc = doctors.find(d => d.id === app.doctorId);
+                              return (
+                                !receptionSearch ||
+                                (pat?.name || '').toLowerCase().includes(searchLower) ||
+                                (pat?.phone || '').toLowerCase().includes(searchLower) ||
+                                (pat?.caseCode || '').toLowerCase().includes(searchLower) ||
+                                (doc?.name || '').toLowerCase().includes(searchLower)
+                              );
+                            }).sort((a, b) => {
+                              return (a.time || '').localeCompare(b.time || '');
+                            });
+
+                            if (filteredTodayApps.length === 0) {
+                              return (
+                                <tr>
+                                  <td colSpan={6} className="p-12 text-center text-slate-400 italic">لا توجد حالات مطابقة اليوم</td>
+                                </tr>
+                              );
+                            }
+
+                            return filteredTodayApps.map((item) => {
+                              const pat = patients.find(p => p.id === item.patientId);
+                              const doc = doctors.find(d => d.id === item.doctorId);
+                              return (
+                                <tr key={item.id} className="hover:bg-slate-50/50">
+                                  <td className="p-3">
+                                    <div className="font-extrabold text-slate-800">{pat ? pat.name : 'مريض غير معرّف'}</div>
+                                    <div className="text-[9px] text-slate-400 font-mono mt-0.5">كود: {pat?.caseCode || 'N/A'} - هاتف: {pat?.phone || 'N/A'}</div>
+                                  </td>
+                                  <td className="p-3">
+                                    <div className="font-black text-slate-700">د. {doc ? doc.name : 'غير معرّف'}</div>
+                                    <div className="text-[9px] text-blue-650 font-bold mt-0.5">{doc ? doc.specialty : 'N/A'}</div>
+                                  </td>
+                                  <td className="p-3 font-mono font-black text-slate-700">{item.time || 'N/A'}</td>
+                                  <td className="p-3">
+                                    {item.arrivalTime ? (
+                                      <div className="flex items-center gap-1 text-emerald-700 bg-emerald-50 border border-emerald-100 py-1 px-2.5 rounded-lg w-fit text-[11px] font-black font-mono">
+                                        <CheckCircle2 size={13} className="text-emerald-500" />
+                                        <span>تم الحضور في {item.arrivalTime}</span>
+                                      </div>
+                                    ) : (
+                                      <button 
+                                        onClick={() => updatePatientTime(item.id, 'arrival')}
+                                        className="bg-amber-500 hover:bg-amber-600 text-white font-black py-1.5 px-3 rounded-lg text-[10.5px] transition-transform hover:scale-103 shadow-md shadow-amber-500/10 inline-flex items-center gap-1 leading-none"
+                                      >
+                                        <UserCheck size={12} />
+                                        <span>تأكيد الحضور بالاستقبال 💻</span>
+                                      </button>
+                                    )}
+                                  </td>
+                                  <td className="p-3">
+                                    {item.departureTime ? (
+                                      <span className="text-slate-400 bg-slate-50 border border-slate-100 py-0.5 px-2 rounded-full font-bold">غادر المركز</span>
+                                    ) : item.entryTime ? (
+                                      <span className="text-emerald-700 bg-emerald-50 border border-emerald-100 py-0.5 px-2 rounded-full font-bold inline-flex items-center gap-1">
+                                        <span className="size-1.5 bg-emerald-500 rounded-full animate-ping" />
+                                        بالداخل عند الطبيب
+                                      </span>
+                                    ) : item.arrivalTime ? (
+                                      <span className="text-amber-700 bg-amber-50 border border-amber-100 py-0.5 px-2 rounded-full font-bold">بانتظار النداء بالخارج</span>
+                                    ) : (
+                                      <span className="text-slate-400 italic">معلق (بانتظار الحضور)</span>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-left">
+                                    <span className="text-[10px] text-slate-450 font-bold">فرع {item.branch || selectedBranch}</span>
+                                  </td>
+                                </tr>
+                              );
+                            });
+                          })()}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                      <div>
+                        <h2 className="text-sm font-black text-slate-800">الحالات المجدولة بعيادتك اليوم</h2>
+                        <p className="text-[10px] text-slate-400 font-bold">يمكنك إدارة أوقات التسجيل والنداء صوتياً مباشرً من غرفتك العيادية</p>
+                      </div>
+
+                      <div className="w-full md:w-64 text-right">
+                        <label className="text-[9px] font-black text-slate-400 block mb-1">اختر العيادة / الطبيب المشرف</label>
+                        <select 
+                          value={selectedDoctorId} 
+                          onChange={(e) => setSelectedDoctorId(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-black focus:ring-2 focus:ring-blue-500/10 text-right"
+                        >
+                          {activeDoctors.map(d => (
+                            <option key={d.id} value={d.id}>د. {d.name} ({d.specialty || 'ممارس عام'})</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Status Queue table */}
+                    <div className="border border-slate-150 rounded-xl overflow-hidden animate-in fade-in duration-200">
+                      <table className="w-full text-right text-xs">
+                        <thead className="bg-slate-50 text-slate-500 font-black uppercase text-[9px] tracking-wider border-b border-slate-150">
+                          <tr>
+                            <th className="p-3">المريض</th>
+                            <th className="p-3">وقت الحجز</th>
+                            <th className="p-3">الوصول لمقر الاستقبال</th>
+                            <th className="p-3">رقم الاستدعاء</th>
+                            <th className="p-3">الموقف الحالي</th>
+                            <th className="p-3 text-center">النداء بالصوت</th>
+                            <th className="p-3 text-left">التوقيت السريري</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {doctorQueue.length > 0 ? (
+                            doctorQueue.map((item, idx) => {
+                              const pat = patients.find(p => p.id === item.patientId);
+                              const isPrimary = item.notes?.includes('طوارئ') || item.serviceType === 'طوارئ';
+                              
+                              return (
+                                <tr key={item.id} className={`hover:bg-slate-50/50 ${isPrimary ? 'bg-rose-50/20' : ''}`}>
+                                  <td className="p-3">
+                                    <div className="font-extrabold text-slate-800 flex items-center gap-1.5 justify-end">
+                                      {isPrimary && <span className="bg-rose-100 text-rose-700 text-[8px] font-black px-1.5 py-0.5 rounded animate-pulse">حالة طارئة 🚨</span>}
+                                      <span>{pat ? pat.name : 'مريض غير معرّف'}</span>
+                                    </div>
+                                    <div className="text-[9px] text-slate-400 font-mono mt-0.5">كود: {pat?.caseCode || 'N/A'} - تليفون: {pat?.phone || 'N/A'}</div>
+                                  </td>
+                                  
+                                  <td className="p-3 font-mono text-slate-600 font-bold">{item.time || 'N/A'}</td>
+                                  
+                                  <td className="p-3">
+                                    {item.arrivalTime ? (
+                                      <span className="bg-slate-100 text-slate-700 font-semibold py-1 px-2 rounded font-mono">{item.arrivalTime}</span>
+                                    ) : (
+                                      <button 
+                                        onClick={() => updatePatientTime(item.id, 'arrival')}
+                                        className="text-amber-600 hover:text-amber-700 flex items-center gap-1 justify-end font-extrabold text-[10px]"
+                                      >
+                                        <UserPlus size={12} />
+                                        <span>تأكيد حضور عاجل</span>
+                                      </button>
+                                    )}
+                                  </td>
+
+                                  <td className="p-3 font-extrabold font-mono text-indigo-600">A-{idx + 1}</td>
+
+                                  <td className="p-3">
+                                    {item.departureTime ? (
+                                      <span className="text-slate-400 bg-slate-50 border border-slate-100 py-0.5 px-2 rounded-full font-bold">الحالة غادرت</span>
+                                    ) : item.entryTime ? (
+                                      <span className="text-emerald-700 bg-emerald-50 border border-emerald-100 py-0.5 px-2 rounded-full font-bold inline-flex items-center gap-1">
+                                        <span className="size-1.5 rounded-full bg-emerald-500 animate-ping" />
+                                        داخل العيادة الآن
+                                      </span>
+                                    ) : item.arrivalTime ? (
+                                      <span className="text-amber-700 bg-amber-50 border border-amber-100 py-0.5 px-2 rounded-full font-bold">في الانتظار بالخارج</span>
+                                    ) : (
+                                      <span className="text-slate-450 italic bg-amber-50/40 border border-dashed border-amber-200 py-0.5 px-1.5 rounded text-[10px] font-bold">معلق بالاستقبال 💻</span>
+                                    )}
+                                  </td>
+
+                                  <td className="p-3 text-center">
+                                    <button 
+                                      onClick={() => handleVocalCall(pat ? pat.name : 'الحالة')}
+                                      className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 p-1.5 rounded-lg transition-transform hover:scale-105 inline-flex items-center gap-1 font-bold text-[10px]"
+                                      title="استدعاء صوتي سريع"
+                                    >
+                                      <Volume2 size={13} />
+                                      <span>استدعاء مباشر</span>
+                                    </button>
+                                  </td>
+
+                                  <td className="p-3 text-left space-x-1 space-x-reverse">
+                                    {!item.entryTime ? (
+                                      <button 
+                                        disabled={!item.arrivalTime}
+                                        onClick={() => updatePatientTime(item.id, 'entry')}
+                                        className={`px-2 py-1 text-[10px] font-black rounded ${item.arrivalTime ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm' : 'bg-slate-150 text-slate-400 cursor-not-allowed'}`}
+                                      >
+                                        دخول العيادة
+                                      </button>
+                                    ) : !item.departureTime ? (
+                                      <button 
+                                        onClick={() => updatePatientTime(item.id, 'departure')}
+                                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 text-[10px] font-black rounded shadow-sm"
+                                      >
+                                        إنهاء الفحص ومغادرة
+                                      </button>
+                                    ) : (
+                                      <span className="text-slate-400 font-mono text-[10px]">منتهية بنجاح</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          ) : (
+                            <tr>
+                              <td colSpan={7} className="p-12 text-center text-slate-300 italic">لا توجد حجوزات مسجلة لهذه العيادة اليوم</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
-          </div>
 
           {/* Left Column: Voice Caller System Adjustments & Manual SMS logs */}
           <div className="lg:col-span-4 space-y-6">
@@ -554,7 +718,8 @@ export default function QueuingView({
 
           </div>
         </div>
-      )}
+      </div>
+    )}
 
       {/* widescreen TV Display mode */}
       {activeTab === 'tv' && (

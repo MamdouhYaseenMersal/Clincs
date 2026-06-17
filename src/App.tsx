@@ -41,7 +41,10 @@ import {
   MapPin,
   Volume2,
   Activity,
-  Printer
+  Printer,
+  Heart,
+  ShieldCheck,
+  AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -68,6 +71,10 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/ar';
 import MessagesView from './components/MessagesView';
 import QueuingView from './components/QueuingView';
+import { TreatmentPlanView } from './components/TreatmentPlanView';
+import UploadModal from './components/UploadModal';
+import AccountingView from './components/AccountingView';
+import InventoryView from './components/InventoryView';
 
 dayjs.extend(relativeTime);
 dayjs.locale('ar');
@@ -3876,7 +3883,7 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
   const [reports, setReports] = useState<Report[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [selectedAppointmentToComplete, setSelectedAppointmentToComplete] = useState<Appointment | null>(null);
-  const [activeTab, setActiveTab] = useState<'visits' | 'reports' | 'personal' | 'appointments'>('visits');
+  const [activeTab, setActiveTab] = useState<'visits' | 'reports' | 'personal' | 'appointments' | 'medical-history' | 'referrals-exams' | 'treatment-plan'>('visits');
   const [isAddingVisit, setIsAddingVisit] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [preselectedVisitId, setPreselectedVisitId] = useState<string | null>(null);
@@ -3898,6 +3905,29 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [lightboxScale, setLightboxScale] = useState<number>(1);
   const [lightboxRotation, setLightboxRotation] = useState<number>(0);
+
+  // States for referrals and medical approvals (Components 3 & 4)
+  const [isAddingReferral, setIsAddingReferral] = useState(false);
+  const [isAddingInvestigation, setIsAddingInvestigation] = useState(false);
+  const [selectedReferralToDecide, setSelectedReferralToDecide] = useState<any | null>(null);
+  const [selectedInvestigationToUpdate, setSelectedInvestigationToUpdate] = useState<any | null>(null);
+
+  // Temporary Form Inputs
+  const [newReferralType, setNewReferralType] = useState<'emergency' | 'medical_admin' | 'oncology'>('emergency');
+  const [newReferralDesc, setNewReferralDesc] = useState('');
+  const [newInvName, setNewInvName] = useState('');
+  const [newInvType, setNewInvType] = useState<'internal' | 'external'>('internal');
+  const [newInvDept, setNewInvDept] = useState('');
+  const [newInvApprovalReq, setNewInvApprovalReq] = useState(false);
+
+  // States for Editing general medical bio background (allergies, family history, etc)
+  const [isEditingMedicalBio, setIsEditingMedicalBio] = useState(false);
+  const [tempMedicalBio, setTempMedicalBio] = useState({
+    allergies: '',
+    surgicalHistory: '',
+    familyHistory: '',
+    chronicConditions: ''
+  });
 
   const detectedChronicDiseases = useMemo(() => {
     if (!patientVisits || patientVisits.length === 0) return [];
@@ -3940,6 +3970,33 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
     
     return detected;
   }, [patientVisits]);
+
+  const treatmentPlanAlerts = useMemo(() => {
+    if (!patient || !patient.longTermTreatmentPlans) return [];
+    const alerts: any[] = [];
+    const today = dayjs();
+    patient.longTermTreatmentPlans.forEach((plan: any) => {
+      if (plan.status !== 'active') return;
+      const nextReview = dayjs(plan.nextReviewDate);
+      const diffDays = nextReview.diff(today, 'day');
+      if (diffDays < 0) {
+        alerts.push({
+          id: plan.id,
+          type: 'overdue',
+          message: `🚫 خطة العلاج "${plan.planName}" متأخرة عن موعد المراجعة الإكلينيكية الدورية منذ ${Math.abs(diffDays)} يوم شريطة التقييم الفوري!`,
+          plan
+        });
+      } else if (diffDays <= 14) {
+        alerts.push({
+          id: plan.id,
+          type: 'approaching',
+          message: `⚠️ اقترب موعد مراجعة خطة العلاج "${plan.planName}" (يستحق خلال ${diffDays} يوم - بتاريخ ${plan.nextReviewDate})`,
+          plan
+        });
+      }
+    });
+    return alerts;
+  }, [patient]);
 
   // AI-Assisted Medicolegal Briefing & Progress States
   const [aiFolderBrief, setAiFolderBrief] = useState<string>('');
@@ -4095,9 +4152,12 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
   if (!patient) return null;
 
   const tabs = [
-    { id: 'visits', label: 'الزيارات', icon: <Clock size={16} /> },
-    { id: 'appointments', label: 'المواعيد', icon: <Calendar size={16} /> },
-    { id: 'reports', label: 'الملفات', icon: <FileText size={16} /> },
+    { id: 'visits', label: 'الزيارات الكلينيكية', icon: <Clock size={16} /> },
+    { id: 'medical-history', label: 'التاريخ المرضي والشامل', icon: <Activity size={16} /> },
+    { id: 'referrals-exams', label: 'التحويلات والفحوصات الطبية', icon: <Heart size={16} /> },
+    { id: 'treatment-plan', label: 'خطة العلاج طويلة المدى', icon: <Heart size={16} className="text-rose-550 fill-rose-50 hover:scale-105" /> },
+    { id: 'appointments', label: 'المواعيد المجدولة', icon: <Calendar size={16} /> },
+    { id: 'reports', label: 'الملفات والمرفقات', icon: <FileText size={16} /> },
     { id: 'personal', label: 'البيانات الشخصية', icon: <Users size={16} /> },
   ];
 
@@ -4202,6 +4262,36 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
         </div>
       )}
 
+      {treatmentPlanAlerts.length > 0 && (
+        <div className="bg-red-50/70 border border-red-200 rounded-xl p-4 animate-in fade-in slide-in-from-top-3 duration-350 text-right space-y-2 mt-3">
+          <div className="flex items-center gap-2">
+            <span className="bg-red-0 border border-red-150 text-red-850 text-[10px] bg-red-100 font-black px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
+              <span className="size-2 rounded-full bg-red-650 animate-pulse" />
+              تنبيه طبي عاجل: خطط علاجية بحاجة لمراجعة دورية وقائية 🚨
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+            {treatmentPlanAlerts.map((alertItem: any) => (
+              <div 
+                key={alertItem.id} 
+                onClick={() => setActiveTab('treatment-plan')}
+                className="bg-white border hover:border-red-305 border-red-100 rounded-xl p-3 flex gap-2.5 shadow-xs hover:shadow-sm transition-all text-xs text-red-950 font-bold items-start cursor-pointer hover:scale-[1.005]"
+              >
+                <div className={`size-7 rounded-lg ${alertItem.type === 'overdue' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'} flex items-center justify-center text-sm shrink-0 shadow-xs`}>
+                  {alertItem.type === 'overdue' ? '🚫' : '⚠️'}
+                </div>
+                <div className="min-w-0 font-sans text-right">
+                  <div className="text-red-900 font-extrabold truncate">{alertItem.plan.planName}</div>
+                  <div className="text-[10px] text-slate-500 mt-1 font-bold leading-relaxed">
+                    {alertItem.message}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Tabs Navigation */}
       <div className="flex border-b border-slate-200 gap-6">
         {tabs.map(tab => (
@@ -4220,6 +4310,9 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm min-h-[400px]">
+        {activeTab === 'treatment-plan' && (
+          <TreatmentPlanView patient={patient} loadProfile={loadProfile} />
+        )}
         {activeTab === 'visits' && (
           <div className="p-6">
             
@@ -5106,6 +5199,857 @@ function PatientProfileView({ patientId, doctors, appointments: allAppointments 
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'medical-history' && (
+          <div className="p-6 space-y-6 text-right" dir="rtl">
+            {/* Header medical alert */}
+            <div className="bg-blue-50/50 border border-blue-200/60 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-right">
+              <div>
+                <h3 className="font-extrabold text-blue-900 text-sm flex items-center gap-1.5 justify-end">
+                  <span>📋 التاريخ المرضي والملخص السريري الشامل للحالة</span>
+                </h3>
+                <p className="text-[10px] text-blue-700/80 font-bold mt-1">تتبع الحساسية والأمراض المزمنة، وتاريخ العمليات الجراحية، ورصد العلامات الحيوية المتراكم</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setTempMedicalBio({
+                    allergies: patient.allergies || '',
+                    surgicalHistory: patient.surgicalHistory || '',
+                    familyHistory: patient.familyHistory || '',
+                    chronicConditions: patient.chronicConditions || ''
+                  });
+                  setIsEditingMedicalBio(!isEditingMedicalBio);
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs transition-all shadow-md shadow-blue-900/10 flex items-center justify-center gap-1.5 self-end md:self-auto"
+              >
+                {isEditingMedicalBio ? 'إغلاق نافذة التعديل' : 'تحديث الخلفية والملخص الطبي 📝'}
+              </button>
+            </div>
+
+            {/* Editing Bio form */}
+            {isEditingMedicalBio && (
+              <motion.form
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-slate-50 border border-slate-200 p-5 rounded-xl space-y-4"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  await api.updatePatient(patient.id, {
+                    allergies: tempMedicalBio.allergies,
+                    surgicalHistory: tempMedicalBio.surgicalHistory,
+                    familyHistory: tempMedicalBio.familyHistory,
+                    chronicConditions: tempMedicalBio.chronicConditions
+                  });
+                  await loadProfile();
+                  setIsEditingMedicalBio(false);
+                }}
+              >
+                <h4 className="text-xs font-black text-slate-800 border-b border-slate-200 pb-2 flex items-center gap-1.5">
+                  <span>🛠️ تحديث التنبيهات والخلفية السريرية للمريض</span>
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1 text-right">
+                    <label className="text-[10px] font-black text-slate-500">حساسية الأدوية أو الأغذية (Allergies)</label>
+                    <textarea
+                      placeholder="امثلة: حساسية البنسلين، حساسية اللاكتوز..."
+                      className="w-full px-3 py-2 bg-white border border-slate-205 rounded-lg text-xs font-bold focus:ring-1 focus:ring-blue-500 h-16 resize-none focus:outline-none text-right"
+                      value={tempMedicalBio.allergies}
+                      onChange={(e) => setTempMedicalBio({ ...tempMedicalBio, allergies: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1 text-right">
+                    <label className="text-[10px] font-black text-slate-500">العمليات الجراحية السابقة (Surgical History)</label>
+                    <textarea
+                      placeholder="امثلة: استئصال الزائدة الدودية 2018، جراحة قلب مفتوح 2022..."
+                      className="w-full px-3 py-2 bg-white border border-slate-205 rounded-lg text-xs font-bold focus:ring-1 focus:ring-blue-500 h-16 resize-none focus:outline-none text-right"
+                      value={tempMedicalBio.surgicalHistory}
+                      onChange={(e) => setTempMedicalBio({ ...tempMedicalBio, surgicalHistory: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1 text-right">
+                    <label className="text-[10px] font-black text-slate-500">التاريخ العائلي للأمراض (Family Medical History)</label>
+                    <textarea
+                      placeholder="امثلة: قصة إصابة عائلية بالسكري والضغط والجلطات..."
+                      className="w-full px-3 py-2 bg-white border border-slate-205 rounded-lg text-xs font-bold focus:ring-1 focus:ring-blue-500 h-16 resize-none focus:outline-none text-right"
+                      value={tempMedicalBio.familyHistory}
+                      onChange={(e) => setTempMedicalBio({ ...tempMedicalBio, familyHistory: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1 text-right">
+                    <label className="text-[10px] font-black text-slate-500">الأمراض المزمنة الأخرى المدخلة يدوياً</label>
+                    <textarea
+                      placeholder="أية أمراض مزمنة أو اعتلالات تود تثبيتها خلافاً للمرصودة آلياً..."
+                      className="w-full px-3 py-2 bg-white border border-slate-205 rounded-lg text-xs font-bold focus:ring-1 focus:ring-blue-500 h-16 resize-none focus:outline-none text-right"
+                      value={tempMedicalBio.chronicConditions}
+                      onChange={(e) => setTempMedicalBio({ ...tempMedicalBio, chronicConditions: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-lg shadow-sm"
+                  >
+                    حفظ التغييرات ✓
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingMedicalBio(false)}
+                    className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-lg"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </motion.form>
+            )}
+
+            {/* General Bio summary row */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="p-4 bg-red-50/20 border border-red-100 rounded-xl space-y-1 text-right">
+                <span className="text-[9px] font-black text-red-500 block">⚠️ الحساسية (Allergies)</span>
+                <p className="text-xs font-extrabold text-slate-800">{patient.allergies || 'لا توجد حساسية مسجلة'}</p>
+              </div>
+              <div className="p-4 bg-amber-50/20 border border-amber-100 rounded-xl space-y-1 text-right">
+                <span className="text-[9px] font-black text-amber-600 block">✂️ العمليات السابقة (Surgeries)</span>
+                <p className="text-xs font-extrabold text-slate-800">{patient.surgicalHistory || 'لا يوجد تاريخ جراحي مسجل'}</p>
+              </div>
+              <div className="p-4 bg-teal-50/20 border border-teal-100 rounded-xl space-y-1 text-right">
+                <span className="text-[9px] font-black text-teal-600 block">🩺 التاريخ العائلي (Family History)</span>
+                <p className="text-xs font-extrabold text-slate-800">{patient.familyHistory || 'لا يوجد تاريخ عائلي مسجل'}</p>
+              </div>
+              <div className="p-4 bg-indigo-50/20 border border-indigo-100 rounded-xl space-y-1 text-right">
+                <span className="text-[9px] font-black text-indigo-600 block">🛡️ مشكلات مزمنة يدوية</span>
+                <p className="text-xs font-extrabold text-slate-800">{patient.chronicConditions || 'لا توجد مشكلات إضافية مسجلة'}</p>
+              </div>
+            </div>
+
+            {/* Automatic AI-brief & chronic checklist */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Detected Chronic list */}
+              <div className="bg-white border border-slate-200 p-4 rounded-xl space-y-3 md:col-span-1 text-right">
+                <h4 className="text-xs font-black text-slate-800 border-b border-slate-100 pb-2 flex items-center gap-1.5 justify-end">
+                  <span className="text-red-600">🚨</span> رصد الأمراض المزمنة التلقائي
+                </h4>
+                {detectedChronicDiseases.length === 0 ? (
+                  <p className="text-[11px] text-slate-400 font-bold italic py-4">لا توجد أمراض مزمنة تم رصدها آلياً بنظافة السجل حتى الآن.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {detectedChronicDiseases.map((d: any, idx: number) => (
+                      <div key={idx} className="bg-rose-50/40 border border-rose-100 p-2.5 rounded-lg text-right">
+                        <div className="text-[11px] font-black text-rose-950">{d.name}</div>
+                        <div className="text-[9px] text-slate-400 mt-1">كشف عنه في: {d.foundIn}</div>
+                        <div className="text-[9px] text-slate-450 italic font-mono mt-0.5">{dayjs(d.date).format('DD/MM/YYYY')}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Patient visits chronology timeline & Clinical Notes accumulation */}
+              <div className="bg-white border border-slate-200 p-4 rounded-xl space-y-3 md:col-span-2 text-right">
+                <h4 className="text-xs font-black text-slate-800 border-b border-slate-100 pb-2 flex items-center gap-1.5 justify-end">
+                  <span className="text-blue-600">📋</span> حصر وتلخيص التاريخ المرضي لجميع الكشوفات السابقة
+                </h4>
+                {patientVisits.length === 0 ? (
+                  <p className="text-[11px] text-slate-450 italic py-4">لا توجد سجلات زيارات سابقة متوفرة لهذا المريض لتلخيصها.</p>
+                ) : (
+                  <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
+                    {patientVisits.map((v: any) => (
+                      <div key={v.id} className="p-3 bg-slate-50/50 rounded-lg border border-slate-150 relative text-right">
+                        <div className="flex justify-between items-center mb-1 border-b border-slate-100 pb-1.5">
+                          <span className="text-[9px] bg-slate-200 border border-slate-300 font-mono text-slate-600 px-2 py-0.5 rounded">
+                            {dayjs(v.date).format('YYYY/MM/DD - hh:mm a')}
+                          </span>
+                          <span className="text-xs font-extrabold text-blue-900">
+                            {doctors.find((d: any) => d.id === v.doctorId)?.name ? `د. ${doctors.find((d: any) => d.id === v.doctorId).name}` : '---'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1.5 text-right">
+                          <div className="text-right">
+                            <span className="text-[10px] text-slate-400 font-black block text-right">التشخيص الطبي للحالة:</span>
+                            <p className="font-extrabold text-slate-800 text-right">{v.diagnosis || 'كشف روتيني'}</p>
+                          </div>
+                          <div className="text-right text-slate-600">
+                            <span className="text-[10px] text-slate-400 font-black block text-right">التقرير والوصف الطبي والنتائج:</span>
+                            <p className="text-[11px] text-slate-600 line-clamp-3 text-right">{v.clinicalAssessment || v.notes || '---'}</p>
+                          </div>
+                        </div>
+                        {v.prescriptions && v.prescriptions.length > 0 && (
+                          <div className="mt-2 text-[10px] p-1.5 bg-sky-50/30 text-sky-950 border border-sky-100 rounded text-right">
+                            <strong>💊 الأدوية والروشتة المستحقة للكشف: </strong>
+                            {v.prescriptions.map((p: any) => `${p.name} (${p.quantity || 1})`).join(' ، ')}
+                          </div>
+                        )}
+                        {/* Attachments / Prescriptions rendering */}
+                        {(v.prescriptionUrl || v.attachmentUrl) && (
+                          <div className="mt-2 flex flex-wrap gap-2 pt-1 border-t border-slate-100 justify-end">
+                            {v.prescriptionUrl && (
+                              <a
+                                href={v.prescriptionUrl}
+                                target="_blank"
+                                referrerPolicy="no-referrer"
+                                className="text-[9px] bg-emerald-50 text-emerald-800 px-2 py-1 rounded border border-emerald-100 font-bold hover:bg-emerald-100 transition-all flex items-center gap-1"
+                              >
+                                📄 عرض الروشتة المرفوعة
+                              </a>
+                            )}
+                            {v.attachmentUrl && (
+                              <a
+                                href={v.attachmentUrl}
+                                target="_blank"
+                                referrerPolicy="no-referrer"
+                                className="text-[9px] bg-blue-50 text-blue-800 px-2 py-1 rounded border border-blue-100 font-bold hover:bg-blue-100 transition-all flex items-center gap-1"
+                              >
+                                📎 عرض المرفق المرفوع
+                              </a>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Vitals Signs History & Update Panel (Components 1 & 2) */}
+            <div className="bg-white border border-slate-200 p-5 rounded-xl space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                <div className="text-right">
+                  <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5 font-sans justify-end text-right">
+                    <span className="text-rose-600">📊</span> سجل مراقبة وتغير العلامات الحيوية (Vitals History Log)
+                  </h4>
+                  <p className="text-[10px] text-slate-400 font-bold mt-0.5 text-right">تاريخ متكامل للعلامات الحيوية المسجلة أثناء الفحوصات والزيارات السابقة للحالة</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowQuickVitalsModal(true)}
+                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs tracking-wide transition-all shadow-sm flex items-center justify-center gap-1"
+                >
+                  <Activity size={14} /> تسجيل علامات حيوية جديدة بصورة منفصلة 🩺
+                </button>
+              </div>
+
+              {patientVisits.filter((v: any) => v.vitals && (v.vitals.temperature || v.vitals.bloodPressure || v.vitals.pulse || v.vitals.weight || v.vitals.height)).length === 0 ? (
+                <p className="text-[11px] text-slate-455 italic py-6 text-center font-bold text-right block w-full">لا توجد أية قياسات للعلامات الحيوية مسجلة في سجل هذا المريض بعد.</p>
+              ) : (
+                <div className="overflow-x-auto text-right" dir="rtl">
+                  <table className="w-full text-xs font-bold border-collapse text-right">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-right">
+                        <th className="py-2.5 px-3 text-right">التاريخ والوقت</th>
+                        <th className="py-2.5 px-3 text-center">الحرارة</th>
+                        <th className="py-2.5 px-3 text-center">ضغط الدم</th>
+                        <th className="py-2.5 px-3 text-center">نبض القلب</th>
+                        <th className="py-2.5 px-3 text-center">الوزن / الطول</th>
+                        <th className="py-2.5 px-3 text-center">مؤشر كتلة الجسم (BMI)</th>
+                        <th className="py-2.5 px-3 text-right">نوع الفحص / الزيارة</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {patientVisits
+                        .filter((v: any) => v.vitals && (v.vitals.temperature || v.vitals.bloodPressure || v.vitals.pulse || v.vitals.weight || v.vitals.height))
+                        .map((v: any) => {
+                          let bmi = '---';
+                          if (v.vitals?.weight && v.vitals?.height) {
+                            const w = Number(v.vitals.weight || 0);
+                            const h = Number(v.vitals.height || 0) / 100;
+                            if (h > 0) bmi = (w / (h * h)).toFixed(1);
+                          }
+                          return (
+                            <tr key={v.id} className="border-b border-slate-100 hover:bg-slate-50/50 transition-colors text-right">
+                              <td className="py-3 px-3 text-right text-slate-500 font-mono text-[11px]">
+                                {dayjs(v.date).format('YYYY/MM/DD - hh:mm a')}
+                              </td>
+                              <td className="py-3 px-3 text-center">
+                                {v.vitals.temperature ? (
+                                  <span className="bg-red-50 text-red-700 font-sans px-2 py-1 rounded text-[11px] font-black">{v.vitals.temperature} °C</span>
+                                ) : '---'}
+                              </td>
+                              <td className="py-3 px-3 text-center font-sans">
+                                {v.vitals.bloodPressure ? (
+                                  <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded text-[11px] font-black">{v.vitals.bloodPressure} mmHg</span>
+                                ) : '---'}
+                              </td>
+                              <td className="py-3 px-3 text-center font-sans">
+                                {v.vitals.pulse ? (
+                                  <span className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded text-[11px] font-black">{v.vitals.pulse} bpm</span>
+                                ) : '---'}
+                              </td>
+                              <td className="py-3 px-3 text-center">
+                                {v.vitals.weight || v.vitals.height ? (
+                                  <span className="bg-teal-50 text-teal-700 px-2 py-1 rounded text-[11px] font-black">
+                                    {v.vitals.weight ? `${v.vitals.weight} كجم` : ''} {v.vitals.height ? ` / ${v.vitals.height} سم` : ''}
+                                  </span>
+                                ) : '---'}
+                              </td>
+                              <td className="py-3 px-3 text-center">
+                                {bmi !== '---' ? (
+                                  <span className={`px-2 py-1 rounded text-[11px] font-black ${Number(bmi) > 25 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}>
+                                    {bmi}
+                                  </span>
+                                ) : '---'}
+                              </td>
+                              <td className="py-3 px-3 text-right max-w-[150px] truncate text-slate-650 font-bold text-right" title={v.serviceType}>
+                                {v.serviceType || 'كشف طبي'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 🏢 Referrals & Investigations Tab (Components 3 & 4) */}
+        {activeTab === 'referrals-exams' && (
+          <div className="p-6 space-y-6 text-right" dir="rtl">
+            
+            {/* 1. Referrals Section (طلبات التحويل للأقسام والأورام والطوارئ) */}
+            <div className="bg-white border border-slate-205 rounded-xl p-5 space-y-4 text-right">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3 text-right">
+                <div className="text-right">
+                  <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5 font-sans justify-end text-right">
+                    <span className="text-indigo-600">🏢</span> ادارة تحويلات المريض ومسارات الرعاية (Referral Routing)
+                  </h4>
+                  <p className="text-[10px] text-slate-400 font-bold mt-0.5 text-right">تحويل المريض لإدارة الطوارئ، لإدارة الأورام، أو للأقسام الطبية للموافقات الخاصة</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingReferral(!isAddingReferral)}
+                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-lg text-xs leading-none transition-all shadow-sm flex items-center gap-1"
+                >
+                  <Plus size={14} /> إنشاء طلب تحويل جديد للحالة
+                </button>
+              </div>
+
+              {/* Referral Request Form */}
+              {isAddingReferral && (
+                <motion.form 
+                  initial={{ opacity: 0, y: -5 }} 
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3 text-right"
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (!newReferralDesc.trim()) {
+                      alert('يرجى إدخال تفاصيل وموجبات التحويل مسبقاً.');
+                      return;
+                    }
+                    const newRefObj = {
+                      id: Math.random().toString(36).substr(2, 9),
+                      type: newReferralType,
+                      requestDescription: newReferralDesc,
+                      status: 'pending' as const,
+                      createdAt: new Date().toISOString()
+                    };
+                    const currentRefs = patient.referrals || [];
+                    await api.updatePatient(patient.id, {
+                      referrals: [newRefObj, ...currentRefs]
+                    });
+                    await loadProfile();
+                    setNewReferralDesc('');
+                    setIsAddingReferral(false);
+                  }}
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-right">
+                    <div className="space-y-1 text-right">
+                      <label className="text-[10px] font-black text-slate-500 text-right block">الجهة / إدارة التحويل المستهدفة</label>
+                      <select
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-right"
+                        value={newReferralType}
+                        onChange={(e: any) => setNewReferralType(e.target.value)}
+                      >
+                        <option value="emergency">🚨 إدارة الطوارئ والحالات الحرجة (Emergency)</option>
+                        <option value="medical_admin">🏦 الإدارة الطبية للموافقة على طلب محدد</option>
+                        <option value="oncology">🎗️ إدارة علاج الأورام والتخصصات الموجهة (Oncology)</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1 md:col-span-2 text-right">
+                      <label className="text-[10px] font-black text-slate-500 text-right block">تفاصيل الطلب / الأسباب وتوصية الطبيب المحول</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="اكتب التماس الطلب، دواعي التحويل، أو الموافقات المطلوبة للحالة..."
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 text-right"
+                        value={newReferralDesc}
+                        onChange={(e) => setNewReferralDesc(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1 text-right">
+                    <button type="submit" className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-black shadow-sm">
+                      إرسال وتوجيه طلب تحويل الحالة ✓
+                    </button>
+                    <button type="button" onClick={() => setIsAddingReferral(false)} className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded text-xs">
+                      إلغاء
+                    </button>
+                  </div>
+                </motion.form>
+              )}
+
+              {/* Referrals list */}
+              {!patient.referrals || patient.referrals.length === 0 ? (
+                <p className="text-[11px] text-slate-450 italic py-4 font-bold text-right">صندوق التحويلات نظيف ولا توجد تحويلات سابقة مسجلة للحالة.</p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-right">
+                  {patient.referrals.map((r: any) => (
+                    <div key={r.id} className="p-4 bg-slate-50/50 rounded-xl border border-slate-200 relative text-right flex flex-col justify-between space-y-3">
+                      <div>
+                        <div className="flex justify-between items-center mb-1.5">
+                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${
+                            r.type === 'emergency' ? 'bg-red-105 bg-red-100 text-red-800' :
+                            r.type === 'oncology' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
+                          }`}>
+                            {r.type === 'emergency' && '🚨 إدارة الطوارئ'}
+                            {r.type === 'oncology' && '🎗️ إدارة الأورام'}
+                            {r.type === 'medical_admin' && '🏦 الإدارة الطبية لموافقات الطلبات'}
+                          </span>
+                          <span className="text-[9px] font-mono text-slate-400 font-bold">{dayjs(r.createdAt).format('DD/MM/YYYY hh:mm a')}</span>
+                        </div>
+                        <p className="text-xs font-extrabold text-slate-800 leading-relaxed text-right">
+                          <strong>موجبات التحويل:</strong> {r.requestDescription}
+                        </p>
+                        {r.notes && (
+                          <div className="mt-2 text-[10px] bg-slate-100 p-2 border border-slate-202 rounded text-slate-700 font-bold text-right">
+                            <strong>رد القرار للحالة:</strong> {r.notes}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-200/50 flex justify-between items-center text-right col-span-2">
+                        <div className="flex items-center gap-1.5 text-right">
+                          <span className="text-[9px] text-slate-400 font-bold text-right">الحالة:</span>
+                          <span className={`text-[10px] font-black px-2.5 py-0.5 rounded ${
+                            r.status === 'approved' ? 'bg-emerald-100 text-emerald-800' :
+                            r.status === 'rejected' ? 'bg-rose-100 text-rose-800' :
+                            r.status === 'completed' ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800'
+                          }`}>
+                            {r.status === 'pending' && '⏳ بانتظار الرد والموافقة'}
+                            {r.status === 'approved' && '✓ معتمد / مقبول'}
+                            {r.status === 'rejected' && '✕ طلب غير موافق عليه'}
+                            {r.status === 'completed' && '✪ قُيد مكتمل / تم الحفظ'}
+                          </span>
+                        </div>
+
+                        {/* Adjudication dropdown */}
+                        <div className="flex gap-1.5 text-right">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedReferralToDecide(r)}
+                            className="text-[10px] font-black hover:underline text-indigo-700 bg-white border border-indigo-200 px-2.5 py-1 rounded hover:bg-indigo-50"
+                          >
+                            تعديل القرار ⚖️
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Referral Decision dialogue box */}
+            {selectedReferralToDecide && (
+              <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <motion.div 
+                  initial={{ scale: 0.95 }} 
+                  animate={{ scale: 1 }} 
+                  className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4 border border-slate-100 text-right" dir="rtl"
+                >
+                  <h3 className="text-sm font-black text-slate-800 flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                    <span>⚖️ تعديل قرار وحالة التحويل للأقسام المعنية</span>
+                  </h3>
+                  <div className="space-y-3">
+                    <p className="text-xs text-slate-600 font-extrabold">{selectedReferralToDecide.requestDescription}</p>
+                    <div className="space-y-1 text-right">
+                      <label className="text-[10px] font-black text-slate-505 text-right block">تحديث حالة القرار السريري</label>
+                      <select
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-right"
+                        value={selectedReferralToDecide.status}
+                        onChange={(e: any) => setSelectedReferralToDecide({ ...selectedReferralToDecide, status: e.target.value })}
+                      >
+                        <option value="pending">⏳ قيد المراجعة والدراسة (Pending)</option>
+                        <option value="approved">✓ معتمد وموافق عليه (Approved)</option>
+                        <option value="rejected">✕ مرفوض / لا يستوفي الشروط (Rejected)</option>
+                        <option value="completed">✪ مكتمل وتم اتخاذ اللازم (Completed)</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1 text-right">
+                      <label className="text-[10px] font-black text-slate-500 text-right block">الرد وملاحظات معينة أو مسودة التعليمات</label>
+                      <textarea
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold h-16 resize-none focus:outline-none text-right"
+                        placeholder="اكتب رد اللجنة أو مسودة التعليمات للإدارة المحول إليها..."
+                        value={selectedReferralToDecide.notes || ''}
+                        onChange={(e) => setSelectedReferralToDecide({ ...selectedReferralToDecide, notes: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1 text-right">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const copyRefs = [...(patient.referrals || [])];
+                        const idx = copyRefs.findIndex((x: any) => x.id === selectedReferralToDecide.id);
+                        if (idx !== -1) {
+                          copyRefs[idx] = {
+                            ...selectedReferralToDecide,
+                            updatedAt: new Date().toISOString(),
+                            approvedBy: currentUser?.name || 'الإدارة الطبية'
+                          };
+                          await api.updatePatient(patient.id, { referrals: copyRefs });
+                          await loadProfile();
+                        }
+                        setSelectedReferralToDecide(null);
+                      }}
+                      className="px-4 py-2 bg-emerald-600 text-white hover:bg-emerald-700 font-extrabold text-xs rounded-lg shadow-sm"
+                    >
+                      تأكيد القرار والاعتماد
+                    </button>
+                    <button type="button" onClick={() => setSelectedReferralToDecide(null)} className="px-4 py-2 bg-slate-200 text-slate-700 text-xs rounded-lg">
+                      إلغاء
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+
+
+            {/* 2. Investigations & Exams Section (عمل فحص للحالة مع بيان الموافقات الطبية داخليا أو بجهة أخرى) */}
+            <div className="bg-white border border-slate-205 rounded-xl p-5 space-y-4 text-right">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3 text-right">
+                <div className="text-right">
+                  <h4 className="text-xs font-black text-slate-805 flex items-center gap-1.5 font-sans justify-end text-right">
+                    <span className="text-sky-600">🔬</span> إدارة الفحوصات والتحاليل الطبية والنتائج والموافقات الرسمية
+                  </h4>
+                  <p className="text-[10px] text-slate-400 font-bold mt-0.5 text-right">عمل فحص للحالة (داخلي بالعيادة أو بجهة أخرى) مع بيان ومطابقة خطة الموافقات وصرف النتائج</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingInvestigation(!isAddingInvestigation)}
+                  className="px-3.5 py-2 bg-sky-600 hover:bg-sky-700 text-white font-extrabold rounded-lg text-xs leading-none transition-all shadow-sm flex items-center gap-1"
+                >
+                  <Plus size={14} /> تسجيل فحص / تحليل طبي جديد للمريض
+                </button>
+              </div>
+
+              {/* Add Investigation Form */}
+              {isAddingInvestigation && (
+                <motion.form
+                  initial={{ opacity: 0, y: -5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3 text-right"
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (!newInvName.trim()) {
+                      alert('يرجى كتابة اسم الفحص أو التحليل المطلوب.');
+                      return;
+                    }
+                    const newInvObj = {
+                      id: Math.random().toString(36).substr(2, 9),
+                      name: newInvName,
+                      type: newInvType,
+                      departmentName: newInvType === 'external' ? newInvDept : 'العيادة (داخلي)',
+                      approvalRequired: newInvApprovalReq,
+                      approvalStatus: (newInvApprovalReq ? 'pending' : 'not_required') as any,
+                      createdAt: new Date().toISOString()
+                    };
+                    const currentInvs = patient.investigations || [];
+                    await api.updatePatient(patient.id, {
+                      investigations: [newInvObj, ...currentInvs]
+                    });
+                    await loadProfile();
+                    setNewInvName('');
+                    setNewInvDept('');
+                    setNewInvApprovalReq(false);
+                    setIsAddingInvestigation(false);
+                  }}
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-right">
+                    <div className="space-y-1 text-right">
+                      <label className="text-[10px] font-black text-slate-500 text-right block">اسم الفحص / التحليل / الفحص السريري</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="مثال: رنين مغناطيسي للركبة، صورة دم كاملة CBC..."
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-right"
+                        value={newInvName}
+                        onChange={(e) => setNewInvName(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1 text-right">
+                      <label className="text-[10px] font-black text-slate-500 text-right block">نطاق عمل الفحص</label>
+                      <select
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-right"
+                        value={newInvType}
+                        onChange={(e: any) => setNewInvType(e.target.value)}
+                      >
+                        <option value="internal">🔬 داخلياً داخل العيادة (Internal)</option>
+                        <option value="external">🏦 بجهة معينة أو إدارة أخرى (External)</option>
+                      </select>
+                    </div>
+                    {newInvType === 'external' && (
+                      <div className="space-y-1 text-right">
+                        <label className="text-[10px] font-black text-slate-500 text-right block font-black">اسم الإدارة الأخرى المستهدفة</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="مثال: معمل التحاليل المركزي، مركز الأشعة الفرعي..."
+                          className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-right"
+                          value={newInvDept}
+                          onChange={(e) => setNewInvDept(e.target.value)}
+                        />
+                      </div>
+                    )}
+                    <div className="space-y-2 flex flex-col justify-end pb-1.5 text-right items-end">
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          className="size-4 text-sky-600 focus:ring-sky-500 border-slate-300 rounded"
+                          checked={newInvApprovalReq}
+                          onChange={(e) => setNewInvApprovalReq(e.target.checked)}
+                        />
+                        <span className="text-xs font-extrabold text-slate-700 text-right">يتطلب موافقة طبية مسبقة؟</span>
+                      </label>
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1 text-right">
+                    <button type="submit" className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-black shadow-sm">
+                      طلب وحفظ وعرض الفحص الطبي ✓
+                    </button>
+                    <button type="button" onClick={() => setIsAddingInvestigation(false)} className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded text-xs">
+                      إلغاء
+                    </button>
+                  </div>
+                </motion.form>
+              )}
+
+              {/* Investigations List */}
+              {!patient.investigations || patient.investigations.length === 0 ? (
+                <p className="text-[11px] text-slate-450 italic py-4 font-bold text-right">صندوق طلبات الفحوصات الطبية خالي ولا توجد فحوصات سابقة.</p>
+              ) : (
+                <div className="overflow-x-auto text-right" dir="rtl">
+                  <table className="w-full text-xs font-bold border-collapse text-right">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-right">
+                        <th className="py-2 px-3 text-right">الفحص الطبي وجهة العمل</th>
+                        <th className="py-2 px-3 text-center">النطاق</th>
+                        <th className="py-2 px-3 text-center">الحاجة لموافقة طبية</th>
+                        <th className="py-2 px-3 text-center">حالة الموافقة الرسمية</th>
+                        <th className="py-2 px-3 text-right">النتائج الطبية والعلامات المقيسة</th>
+                        <th className="py-2 px-3 text-center">الإجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {patient.investigations.map((inv: any) => (
+                        <tr key={inv.id} className="border-b border-slate-100 hover:bg-slate-50/40 text-right">
+                          <td className="py-3 px-3 text-right col-span-1">
+                            <span className="font-extrabold text-slate-800 text-right block">{inv.name}</span>
+                            <span className="text-[9px] text-slate-400 block mt-0.5 font-mono text-right font-bold">تاريخ الطلب: {dayjs(inv.createdAt).format('DD/MM/YYYY')}</span>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] ${inv.type === 'internal' ? 'bg-sky-50 text-sky-800' : 'bg-orange-50 text-orange-810'}`}>
+                              {inv.type === 'internal' ? 'داخل العيادة' : `بإدارة أخرى: ${inv.departmentName || 'إدارة خارجية'}`}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            {inv.approvalRequired ? (
+                              <span className="text-[10px] text-amber-700 font-bold">⚠️ نعم (يتطلب اعتماد)</span>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 font-bold">لا يتطلب موافقة</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <span className={`px-2 py-1 rounded text-[10px] font-black ${
+                              inv.approvalStatus === 'approved' ? 'bg-emerald-100 text-emerald-800' :
+                              inv.approvalStatus === 'rejected' ? 'bg-rose-100 text-rose-800' :
+                              inv.approvalStatus === 'not_required' ? 'bg-slate-100 text-slate-450' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {inv.approvalStatus === 'approved' && '✓ تمت الموافقة والاعتماد'}
+                              {inv.approvalStatus === 'rejected' && '✕ مرفوض'}
+                              {inv.approvalStatus === 'pending' && '⏳ قيد الموافقة والتحقق'}
+                              {inv.approvalStatus === 'not_required' && 'غير مطلوب'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-right max-w-[200px] col-span-1">
+                            {inv.results ? (
+                              <div className="text-right">
+                                <p className="font-bold text-slate-700 line-clamp-2 text-right">{inv.results}</p>
+                                {inv.vitalsOnExam && (
+                                  <p className="text-[9px] text-rose-700 mt-0.5 font-sans text-right">
+                                    {inv.vitalsOnExam.temperature ? `🌡️ ${inv.vitalsOnExam.temperature}°C` : ''} 
+                                    {inv.vitalsOnExam.bloodPressure ? ` 🩺 ${inv.vitalsOnExam.bloodPressure}` : ''}
+                                  </p>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 font-bold italic text-[11px] text-right block">بانتظار عمل الفحص وتدوين النتيجة</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedInvestigationToUpdate(inv)}
+                              className="text-[10px] font-black hover:underline text-sky-700 bg-sky-50 border border-sky-100 px-2.5 py-1 rounded hover:bg-sky-100"
+                            >
+                              الاعتماد والنتيجة 🧪
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Investigation and Vitals Update dialogue box */}
+            {selectedInvestigationToUpdate && (
+              <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <motion.div 
+                  initial={{ scale: 0.95 }} 
+                  animate={{ scale: 1 }} 
+                  className="bg-white rounded-2xl w-full max-w-lg p-6 space-y-4 border border-slate-100 text-right" dir="rtl"
+                >
+                  <div className="border-b border-slate-100 pb-2">
+                    <h3 className="text-sm font-black text-slate-800 text-right">🔬 تحديث نتائج الفحص والموافقات الطبية والعلامات الحيوية</h3>
+                    <p className="text-[10px] text-slate-450 mt-1 font-bold text-right">الفحص المستهدف: {selectedInvestigationToUpdate.name}</p>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Approval Status */}
+                      <div className="space-y-1 text-right">
+                        <label className="text-[10px] font-black text-slate-500 text-right block">حالة الموافقة الطبية (داخلياً أو من الإدارة المعنية)</label>
+                        <select
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg text-xs font-bold text-right"
+                          value={selectedInvestigationToUpdate.approvalStatus}
+                          onChange={(e: any) => setSelectedInvestigationToUpdate({ ...selectedInvestigationToUpdate, approvalStatus: e.target.value })}
+                        >
+                          <option value="not_required">غير مطلوب موافقة (رأي طبي مستقل)</option>
+                          <option value="pending">⏳ قيد المراجعة والموافقة (Pending)</option>
+                          <option value="approved">✓ معتمد وموافق عليه طبياً (Approved)</option>
+                          <option value="rejected">✕ مرفوض لعدم استيفاء الشروط (Rejected)</option>
+                        </select>
+                      </div>
+                      
+                      {/* Approved By */}
+                      <div className="space-y-1 text-right">
+                        <label className="text-[10px] font-black text-slate-500 text-right block">الشخص المصدق أو الإدارة المانحة للموافقة</label>
+                        <input
+                          type="text"
+                          placeholder="مثال: د. محمد الشافي، الإدارة الفرعية..."
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg text-xs font-bold text-right"
+                          value={selectedInvestigationToUpdate.approvedBy || ''}
+                          onChange={(e) => setSelectedInvestigationToUpdate({ ...selectedInvestigationToUpdate, approvedBy: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Vitals signs measured during investigation/examination (Components 1 & 4) */}
+                    <div className="border border-rose-100 bg-rose-50/10 p-3 rounded-xl space-y-2">
+                      <span className="text-[10px] font-black text-rose-800 block text-right">📊 قياس وتسجيل العلامات الحيوية أثناء عمل الفحص (اختياري)</span>
+                      <div className="grid grid-cols-4 gap-2">
+                        <div>
+                          <label className="text-[9px] font-bold text-slate-500 block text-right">الحرارة (°C)</label>
+                          <input
+                            type="text"
+                            placeholder="37"
+                            className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-xs font-mono text-center"
+                            value={selectedInvestigationToUpdate.vitalsOnExam?.temperature || ''}
+                            onChange={(e) => setSelectedInvestigationToUpdate({
+                              ...selectedInvestigationToUpdate,
+                              vitalsOnExam: { ...(selectedInvestigationToUpdate.vitalsOnExam || {}), temperature: e.target.value }
+                            })}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-slate-500 block text-right">الضغط (BP)</label>
+                          <input
+                            type="text"
+                            placeholder="120/80"
+                            className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-xs font-mono text-center"
+                            value={selectedInvestigationToUpdate.vitalsOnExam?.bloodPressure || ''}
+                            onChange={(e) => setSelectedInvestigationToUpdate({
+                              ...selectedInvestigationToUpdate,
+                              vitalsOnExam: { ...(selectedInvestigationToUpdate.vitalsOnExam || {}), bloodPressure: e.target.value }
+                            })}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-slate-500 block text-right">النبض (bpm)</label>
+                          <input
+                            type="text"
+                            placeholder="75"
+                            className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-xs font-mono text-center"
+                            value={selectedInvestigationToUpdate.vitalsOnExam?.pulse || ''}
+                            onChange={(e) => setSelectedInvestigationToUpdate({
+                              ...selectedInvestigationToUpdate,
+                              vitalsOnExam: { ...(selectedInvestigationToUpdate.vitalsOnExam || {}), pulse: e.target.value }
+                            })}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-slate-500 block text-right">الوزن (kg)</label>
+                          <input
+                            type="text"
+                            placeholder="70"
+                            className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-xs font-mono text-center"
+                            value={selectedInvestigationToUpdate.vitalsOnExam?.weight || ''}
+                            onChange={(e) => setSelectedInvestigationToUpdate({
+                              ...selectedInvestigationToUpdate,
+                              vitalsOnExam: { ...(selectedInvestigationToUpdate.vitalsOnExam || {}), weight: e.target.value }
+                            })}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Investigation results details */}
+                    <div className="space-y-1 text-right">
+                      <label className="text-[10px] font-black text-slate-500 text-right block">النتيجة والتقرير الطبي للفحص (Clinical Notes & Results)</label>
+                      <textarea
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg text-xs font-bold h-20 resize-none focus:outline-none text-right font-black"
+                        placeholder="دون النتائج الطبية للفحص، الملاحظات الإكلينيكية، التشخيص السريري الناتج عن الفحص..."
+                        value={selectedInvestigationToUpdate.results || ''}
+                        onChange={(e) => setSelectedInvestigationToUpdate({ ...selectedInvestigationToUpdate, results: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-1 text-right">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const copyInvs = [...(patient.investigations || [])];
+                        const idx = copyInvs.findIndex((x: any) => x.id === selectedInvestigationToUpdate.id);
+                        if (idx !== -1) {
+                          copyInvs[idx] = {
+                            ...selectedInvestigationToUpdate,
+                            updatedAt: new Date().toISOString()
+                          };
+                          await api.updatePatient(patient.id, { investigations: copyInvs });
+                          await loadProfile();
+                        }
+                        setSelectedInvestigationToUpdate(null);
+                      }}
+                      className="px-4 py-2 bg-emerald-600 text-white hover:bg-emerald-700 font-extrabold text-xs rounded-lg shadow-sm"
+                    >
+                      تأكيد وحفظ النتيجة والموافقات الطبية
+                    </button>
+                    <button type="button" onClick={() => setSelectedInvestigationToUpdate(null)} className="px-4 py-2 bg-slate-200 text-slate-705 text-xs rounded-lg">
+                      إلغاء
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+            
           </div>
         )}
       </div>
@@ -8351,2049 +9295,9 @@ function VisitModal({ onClose, doctors, onSubmit }: any) {
   );
 }
 
-function UploadModal({ onClose, onUpload, visits, doctors, initialVisitId }: any) {
-  const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState("");
-  const [type, setType] = useState<'prescription' | 'report' | 'other'>('prescription');
 
-  // Find the most recent completed visit:
-  const completedVisits = (visits || []).filter((v: any) => v.status === 'completed' || !v.status);
-  const sortedCompleted = [...completedVisits].sort((a: any, b: any) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
-  const mostRecentCompletedVisitId = sortedCompleted[0]?.id || "";
 
-  const [visitId, setVisitId] = useState(initialVisitId || mostRecentCompletedVisitId);
-
-  return (
-    <div 
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.98, y: 10 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.98, y: 10 }}
-        className="bg-white w-full max-w-md rounded-xl overflow-hidden shadow-2xl border border-slate-200"
-      >
-        <div className="p-5 bg-white border-b border-slate-100 flex items-center justify-between">
-          <h2 className="text-lg font-black text-slate-800">رفع ملف طبي</h2>
-          <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-lg transition-colors text-slate-400"><X size={20} /></button>
-        </div>
-        <form className="p-6 space-y-4 text-right" onSubmit={(e) => { e.preventDefault(); if(file) onUpload(file, title, type, visitId); }}>
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">نوع الملف</label>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setType('prescription')} className={`flex-1 p-3 rounded-lg border transition-all font-black text-[10px] uppercase tracking-widest ${type === 'prescription' ? 'border-emerald-600 bg-emerald-50 text-emerald-600' : 'border-slate-100 bg-slate-50 text-slate-400'}`}>روشتة</button>
-              <button type="button" onClick={() => setType('report')} className={`flex-1 p-3 rounded-lg border transition-all font-black text-[10px] uppercase tracking-widest ${type === 'report' ? 'border-emerald-600 bg-emerald-50 text-emerald-600' : 'border-slate-100 bg-slate-50 text-slate-400'}`}>تقرير طبي</button>
-            </div>
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">عنوان الملف</label>
-            <input type="text" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/10 transition-all text-sm" placeholder="مثال: تحليل دم، أشعة..." value={title} onChange={(e) => setTitle(e.target.value)} />
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">ارتباط بزيارة (اختياري)</label>
-            <select className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={visitId} onChange={(e) => setVisitId(e.target.value)}>
-              <option value="">لا يوجد ارتباط</option>
-              {visits.slice().reverse().map((v: any) => (
-                <option key={v.id} value={v.id}>
-                  كشف {dayjs(v.date).format('DD/MM')} - د. {doctors.find((d: any) => d.id === v.doctorId)?.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div 
-            className="border border-dashed border-slate-200 rounded-xl p-6 text-center bg-slate-50 hover:bg-white hover:border-emerald-200 transition-all cursor-pointer relative group"
-          >
-            <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-            <div className="flex flex-col items-center gap-2">
-              <div className="size-10 bg-white rounded-lg flex items-center justify-center shadow-sm text-slate-400 group-hover:text-emerald-500 border border-slate-100">
-                <Upload size={18} />
-              </div>
-              <div className="font-bold text-xs text-slate-600 truncate max-w-64">{file ? file.name : 'اسحب الملف هنا أو اضغط للاختيار'}</div>
-              <div className="text-[9px] text-slate-400 uppercase font-black tracking-tighter">PDF, JPG, PNG up to 10MB</div>
-            </div>
-          </div>
-          <div className="pt-4">
-            <button type="submit" disabled={!file} className="w-full py-3 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 shadow-lg shadow-emerald-900/10 text-sm disabled:opacity-50">رفع الملف الآن</button>
-          </div>
-        </form>
-      </motion.div>
-    </div>
-  );
-}
-
-function AccountingView({ visits, doctors, allVisits = [], allPatients = [], allAppointments = [], allDoctors = [] }: any) {
-  const [activeSubTab, setActiveSubTab] = useState<'financial' | 'diseases' | 'doctors' | 'reports' | 'branch-comparison' | 'growth'>('financial');
-  const [chartType, setChartType] = useState<'bar' | 'line'>('bar');
-  const [yearlyChartType, setYearlyChartType] = useState<'bar' | 'line'>('bar');
-  const [dateRange, setDateRange] = useState({ 
-    start: dayjs().startOf('month').format('YYYY-MM-DD'), 
-    end: dayjs().endOf('month').format('YYYY-MM-DD') 
-  });
-
-  const [compPreset, setCompPreset] = useState<'current-vs-last-month' | 'current-vs-last-quarter' | 'current-vs-last-week' | 'custom'>('current-vs-last-month');
-  const [period1, setPeriod1] = useState({
-    start: dayjs().startOf('month').format('YYYY-MM-DD'),
-    end: dayjs().endOf('month').format('YYYY-MM-DD')
-  });
-  const [period2, setPeriod2] = useState({
-    start: dayjs().subtract(1, 'month').startOf('month').format('YYYY-MM-DD'),
-    end: dayjs().subtract(1, 'month').endOf('month').format('YYYY-MM-DD')
-  });
-
-  const handleCompPresetChange = (preset: 'current-vs-last-month' | 'current-vs-last-quarter' | 'current-vs-last-week' | 'custom') => {
-    setCompPreset(preset);
-    if (preset === 'current-vs-last-month') {
-      setPeriod1({
-        start: dayjs().startOf('month').format('YYYY-MM-DD'),
-        end: dayjs().endOf('month').format('YYYY-MM-DD')
-      });
-      setPeriod2({
-        start: dayjs().subtract(1, 'month').startOf('month').format('YYYY-MM-DD'),
-        end: dayjs().subtract(1, 'month').endOf('month').format('YYYY-MM-DD')
-      });
-    } else if (preset === 'current-vs-last-quarter') {
-      const currentMonth = dayjs().month();
-      const q1Start = dayjs().month(Math.floor(currentMonth / 3) * 3).startOf('month');
-      const q1End = q1Start.add(2, 'month').endOf('month');
-      
-      const q2Start = q1Start.subtract(3, 'month');
-      const q2End = q2Start.add(2, 'month').endOf('month');
-
-      setPeriod1({
-        start: q1Start.format('YYYY-MM-DD'),
-        end: q1End.format('YYYY-MM-DD')
-      });
-      setPeriod2({
-        start: q2Start.format('YYYY-MM-DD'),
-        end: q2End.format('YYYY-MM-DD')
-      });
-    } else if (preset === 'current-vs-last-week') {
-      setPeriod1({
-        start: dayjs().startOf('week').format('YYYY-MM-DD'),
-        end: dayjs().endOf('week').format('YYYY-MM-DD')
-      });
-      setPeriod2({
-        start: dayjs().subtract(1, 'week').startOf('week').format('YYYY-MM-DD'),
-        end: dayjs().subtract(1, 'week').endOf('week').format('YYYY-MM-DD')
-      });
-    }
-  };
-
-  const [reportInsights, setReportInsights] = useState<string>("");
-  const [isGeneratingInsights, setIsGeneratingInsights] = useState<boolean>(false);
-  const [presetType, setPresetType] = useState<'daily' | 'weekly' | 'monthly' | 'custom'>('monthly');
-
-  const finalVisits = allVisits && allVisits.length > 0 ? allVisits : (visits || []);
-  const finalPatients = allPatients && allPatients.length > 0 ? allPatients : [];
-  const finalAppointments = allAppointments && allAppointments.length > 0 ? allAppointments : [];
-  const finalDoctors = allDoctors && allDoctors.length > 0 ? allDoctors : (doctors || []);
-
-  const monthsArabic = useMemo(() => [
-    'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
-    'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
-  ], []);
-
-  // Calculate dynamic monthly patient growth data over the last 12 calendar months
-  const patientGrowthData = useMemo(() => {
-    const data = [];
-    const now = dayjs();
-    
-    // Fetch last 12 months chronologically
-    for (let i = 11; i >= 0; i--) {
-      const targetMonth = now.subtract(i, 'month');
-      const year = targetMonth.year();
-      const monthIndex = targetMonth.month(); // 0-11
-      const label = `${monthsArabic[monthIndex]} ${year}`;
-
-      // Patients registered in this specific month
-      const count = finalPatients.filter((p: any) => {
-        if (!p.createdAt) return false;
-        const d = dayjs(p.createdAt);
-        return d.isValid() && d.year() === year && d.month() === monthIndex;
-      }).length;
-
-      data.push({
-        monthKey: targetMonth.format('YYYY-MM'),
-        label,
-        count,
-        growthRate: 0, // initially 0, calculated below
-      });
-    }
-
-    // MoM (Month over Month) Growth Rate (%) calculation:
-    // Rate (%) = ((Current - Previous) / Previous) * 100
-    for (let j = 0; j < data.length; j++) {
-      if (j === 0) {
-        data[j].growthRate = 0;
-      } else {
-        const prevCount = data[j - 1].count;
-        if (prevCount === 0) {
-          data[j].growthRate = data[j].count > 0 ? 100 : 0;
-        } else {
-          const rate = ((data[j].count - prevCount) / prevCount) * 100;
-          data[j].growthRate = Math.round(rate * 10) / 10; // 1 decimal place precision
-        }
-      }
-    }
-
-    return data;
-  }, [finalPatients, monthsArabic]);
-
-  const branchComparisonData = useMemo(() => {
-    const branchNames = ['المعادي', 'الدقي', 'مدينة نصر', 'اسكندرية'];
-    
-    return branchNames.map(branchName => {
-      // Helper function to calculate branch metrics for a given date range
-      const calculateMetrics = (start: string, end: string) => {
-        const branchVisits = finalVisits.filter((v: any) => {
-          const d = dayjs(v.date);
-          const matchBranch = (v.branch === branchName) || (!v.branch && branchName === 'المعادي');
-          const matchDate = d.isAfter(dayjs(start).subtract(1, 'day')) && d.isBefore(dayjs(end).add(1, 'day'));
-          return matchBranch && matchDate;
-        });
-
-        const branchAppointments = finalAppointments.filter((a: any) => {
-          const d = dayjs(a.date);
-          const matchBranch = (a.branch === branchName) || (!a.branch && branchName === 'المعادي');
-          const matchDate = d.isAfter(dayjs(start).subtract(1, 'day')) && d.isBefore(dayjs(end).add(1, 'day'));
-          return matchBranch && matchDate;
-        });
-
-        const totalRevenue = branchVisits.reduce((sum: number, v: any) => sum + (v.cost || 0), 0);
-        const clinicEarnings = branchVisits.reduce((sum: number, v: any) => sum + (v.clinicEarnings || 0), 0);
-        const doctorEarnings = branchVisits.reduce((sum: number, v: any) => sum + (v.doctorEarnings || 0), 0);
-
-        const activePatientIds = new Set(branchVisits.map((v: any) => v.patientId));
-        const activePatientsCount = activePatientIds.size;
-
-        const branchDocs = finalDoctors.filter((d: any) => (d.branch === branchName) || (!d.branch && branchName === 'المعادي'));
-        const clinicDailyCapacity = branchDocs.reduce((sum: number, d: any) => sum + (d.maxPatientsPerDay || 20), 0) || 20;
-        const daysCount = Math.max(1, dayjs(end).diff(dayjs(start), 'day') + 1);
-        const periodCapacity = clinicDailyCapacity * daysCount;
-        const occupancyRate = periodCapacity > 0 ? Math.min(100, Math.round((branchAppointments.length / periodCapacity) * 100)) : 0;
-
-        return {
-          totalRevenue,
-          clinicEarnings,
-          doctorEarnings,
-          activePatientsCount,
-          occupancyRate,
-          appointmentsCount: branchAppointments.length
-        };
-      };
-
-      const metrics1 = calculateMetrics(period1.start, period1.end);
-      const metrics2 = calculateMetrics(period2.start, period2.end);
-
-      // Calculates Growth percent from period2 to period1
-      const calculateGrowth = (val1: number, val2: number) => {
-        if (val2 === 0) return val1 > 0 ? 100 : 0;
-        return Math.round(((val1 - val2) / val2) * 100);
-      };
-
-      const revenueGrowth = calculateGrowth(metrics1.totalRevenue, metrics2.totalRevenue);
-      const appointmentsGrowth = calculateGrowth(metrics1.appointmentsCount, metrics2.appointmentsCount);
-      const occupancyGrowth = metrics1.occupancyRate - metrics2.occupancyRate; // absolute diff
-      const patientsGrowth = calculateGrowth(metrics1.activePatientsCount, metrics2.activePatientsCount);
-
-      const registeredPatientsCount = finalPatients.filter((p: any) => 
-        (p.branch === branchName) || (!p.branch && branchName === 'المعادي')
-      ).length;
-
-      const branchDocs = finalDoctors.filter((d: any) => (d.branch === branchName) || (!d.branch && branchName === 'المعادي'));
-
-      return {
-        name: branchName,
-        revenue1: metrics1.totalRevenue,
-        revenue2: metrics2.totalRevenue,
-        revenueGrowth,
-        clinicEarnings1: metrics1.clinicEarnings,
-        clinicEarnings2: metrics2.clinicEarnings,
-        doctorEarnings1: metrics1.doctorEarnings,
-        doctorEarnings2: metrics2.doctorEarnings,
-        patients1: metrics1.activePatientsCount,
-        patients2: metrics2.activePatientsCount,
-        patientsGrowth,
-        appointments1: metrics1.appointmentsCount,
-        appointments2: metrics2.appointmentsCount,
-        appointmentsGrowth,
-        occupancyRate1: metrics1.occupancyRate,
-        occupancyRate2: metrics2.occupancyRate,
-        occupancyGrowth,
-        doctorsCount: branchDocs.length || 1,
-        registeredPatients: registeredPatientsCount || metrics1.activePatientsCount * 2 || 10
-      };
-    });
-  }, [finalVisits, finalPatients, finalAppointments, finalDoctors, period1, period2]);
-
-  const filteredVisits = visits.filter((v: any) => {
-    const d = dayjs(v.date);
-    return d.isAfter(dayjs(dateRange.start).subtract(1, 'day')) && d.isBefore(dayjs(dateRange.end).add(1, 'day'));
-  });
-
-  const totalRev = filteredVisits.reduce((acc: any, v: any) => acc + (v.cost || 0), 0);
-  const totalDoc = filteredVisits.reduce((acc: any, v: any) => acc + (v.doctorEarnings || 0), 0);
-  const totalClinic = filteredVisits.reduce((acc: any, v: any) => acc + (v.clinicEarnings || 0), 0);
-  const outstandingAmount = filteredVisits.reduce((acc: any, v: any) => acc + (!v.isPaid ? (v.cost || 0) : 0), 0);
-
-  // Comparative Annual Monthly Data (Current Year)
-  const currentYear = dayjs().year();
-
-  const yearlyMonthlyData = useMemo(() => {
-    return Array.from({ length: 12 }).map((_, i) => {
-      const monthVisits = visits.filter((v: any) => {
-        const d = dayjs(v.date);
-        return d.year() === currentYear && d.month() === i;
-      });
-
-      return {
-        name: monthsArabic[i],
-        'إيرادات_العيادة': monthVisits.reduce((acc: any, v: any) => acc + (v.clinicEarnings || 0), 0),
-        'أرباح_الأطباء': monthVisits.reduce((acc: any, v: any) => acc + (v.doctorEarnings || 0), 0),
-        'إجمالي_الإيرادات': monthVisits.reduce((acc: any, v: any) => acc + (v.cost || 0), 0),
-      };
-    });
-  }, [visits, currentYear]);
-
-  // Prepare Chart Data (group by day)
-  const chartData = Array.from({ length: dayjs(dateRange.end).diff(dayjs(dateRange.start), 'day') + 1 }).map((_, i) => {
-    const date = dayjs(dateRange.start).add(i, 'day');
-    const dayVisits = filteredVisits.filter((v: any) => dayjs(v.date).isSame(date, 'day'));
-    return {
-      name: date.format('DD/MM'),
-      إيرادات: dayVisits.reduce((acc: any, v: any) => acc + (v.cost || 0), 0),
-      أطباء: dayVisits.reduce((acc: any, v: any) => acc + (v.doctorEarnings || 0), 0),
-      أرباح: dayVisits.reduce((acc: any, v: any) => acc + (v.clinicEarnings || 0), 0),
-    };
-  });
-
-  // Prepare Pie Chart Data (by specialty)
-  const specialtyData = Array.from(new Set(doctors.map((d: any) => d.specialty))).map(spec => {
-    const specVisits = filteredVisits.filter((v: any) => doctors.find((d: any) => d.id === v.doctorId)?.specialty === spec);
-    const specRev = specVisits.reduce((acc: any, v: any) => acc + (v.cost || 0), 0);
-    return {
-      name: spec,
-      value: specRev
-    };
-  }).filter(d => d.value > 0);
-
-  const COLORS = ['#3B82F6', '#10B981', '#6366F1', '#F59E0B', '#EF4444', '#EC4899', '#8B5CF6'];
-
-  // Diseases/Diagnoses stats breakdown
-  const diagnosisBreakdown = useMemo(() => {
-    const counts: Record<string, { count: number; totalCost: number }> = {};
-    filteredVisits.forEach((v: any) => {
-      let diag = (v.diagnosis || "").trim();
-      if (!diag) diag = "غير محدد / استشارات عامة";
-      if (!counts[diag]) {
-        counts[diag] = { count: 0, totalCost: 0 };
-      }
-      counts[diag].count += 1;
-      counts[diag].totalCost += (v.cost || 0);
-    });
-    
-    return Object.entries(counts)
-      .map(([name, data]) => ({
-        name,
-        count: data.count,
-        totalCost: data.totalCost,
-        percentage: filteredVisits.length > 0 ? ((data.count / filteredVisits.length) * 100).toFixed(1) : "0"
-      }))
-      .sort((a, b) => b.count - a.count);
-  }, [filteredVisits]);
-
-  // Doctors comprehensive performance / case breakdown
-  const doctorsBreakdown = useMemo(() => {
-    return doctors.map((d: any) => {
-      const docVisits = filteredVisits.filter((v: any) => v.doctorId === d.id);
-      const totalCost = docVisits.reduce((acc: any, v: any) => acc + (v.cost || 0), 0);
-      const docPay = docVisits.reduce((acc: any, v: any) => acc + (v.doctorEarnings || 0), 0);
-      const clinicProf = docVisits.reduce((acc: any, v: any) => acc + (v.clinicEarnings || 0), 0);
-      const avgCost = docVisits.length > 0 ? (totalCost / docVisits.length).toFixed(1) : '0';
-      return {
-        id: d.id,
-        name: d.name,
-        specialty: d.specialty,
-        visitsCount: docVisits.length,
-        totalRevenue: totalCost,
-        doctorEarnings: docPay,
-        clinicProfit: clinicProf,
-        averageVisitCost: avgCost
-      };
-    }).sort((a: any, b: any) => b.visitsCount - a.visitsCount);
-  }, [doctors, filteredVisits]);
-
-  const exportToCSV = (data: any[], filename: string) => {
-    if (data.length === 0) return;
-    const headers = Object.keys(data[0]).join(',');
-    const rows = data.map(obj => Object.values(obj).join(',')).join('\n');
-    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + headers + '\n' + rows;
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `${filename}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const exportFinancialReport = () => {
-    const reportData = doctors.map((d: any) => {
-      const docVisits = filteredVisits.filter((v: any) => v.doctorId === d.id);
-      return {
-        'اسم الدكتور': d.name,
-        'التخصص': d.specialty,
-        'عدد الحالات': docVisits.length,
-        'إجمالي الإيراد': docVisits.reduce((acc: any, v: any) => acc + (v.cost || 0), 0),
-        'مستحقات الدكتور': docVisits.reduce((acc: any, v: any) => acc + (v.doctorEarnings || 0), 0),
-        'صافي ربح العيادة': docVisits.reduce((acc: any, v: any) => acc + (v.clinicEarnings || 0), 0),
-      };
-    });
-    exportToCSV(reportData, `Financial_Report_${dateRange.start}_to_${dateRange.end}`);
-  };
-
-  const handleGeneratePeriodicInsights = async () => {
-    setIsGeneratingInsights(true);
-    setReportInsights("");
-    try {
-      const metrics = {
-        totalRevenue: totalRev,
-        doctorEarnings: totalDoc,
-        clinicProfit: totalClinic,
-        outstandingAmount: outstandingAmount,
-        visitsCount: filteredVisits.length,
-        completedCount: filteredVisits.filter((v: any) => v.status === 'completed' || !v.status).length,
-        cancelledCount: filteredVisits.filter((v: any) => v.status === 'cancelled').length,
-        outstandingCount: filteredVisits.filter((v: any) => !v.isPaid).length,
-        dateRange: `${dateRange.start} to ${dateRange.end}`,
-        topSpecialties: specialtyData.map((s: any) => `${s.name}: ${s.value} ج.م`).join(', '),
-        topDiagnoses: diagnosisBreakdown.slice(0, 5).map((d: any) => `${d.name} (${d.count} حالات)`).join(', '),
-        doctorsPerformance: doctorsBreakdown.map((d: any) => `${d.name}: ${d.visitsCount} كشف (صافي للعيادة ${d.clinicProfit} ج.م)`).join(', ')
-      };
-
-      const res = await fetch("/api/generate-report-insights", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ metrics })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setReportInsights(data.insights || "حدث خطأ أثناء صياغة تقرير التحليل الإحصائي الذكي.");
-      } else {
-        setReportInsights("فشل الاتصال بخدمة التحليلات الذكية. الرجاء التحقق من إعدادات الذكاء الاصطناعي.");
-      }
-    } catch (err) {
-      console.error(err);
-      setReportInsights("عذراً، تباطأ الاتصال بالخادم الرئيسي للمؤشرات الذكية.");
-    } finally {
-      setIsGeneratingInsights(false);
-    }
-  };
-
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6 text-right">
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-        <div>
-          <h1 className="text-2xl font-black text-slate-800 tracking-tight">التقارير المالية والمحاسبية</h1>
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">إدارة الأرباح وتوزيع مستحقات الأطباء</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
-            <input 
-              type="date" 
-              className="bg-transparent border-none text-[10px] font-bold focus:outline-none" 
-              value={dateRange.start} 
-              onChange={(e) => setDateRange({...dateRange, start: e.target.value})} 
-            />
-            <span className="text-slate-300">|</span>
-            <input 
-              type="date" 
-              className="bg-transparent border-none text-[10px] font-bold focus:outline-none" 
-              value={dateRange.end} 
-              onChange={(e) => setDateRange({...dateRange, end: e.target.value})} 
-            />
-          </div>
-          <button 
-            type="button"
-            onClick={exportFinancialReport}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/10"
-          >
-            <Download size={14} /> تصدير CSV
-          </button>
-        </div>
-      </header>
-
-      <div className="flex border-b border-slate-200 pb-px gap-3 overflow-x-auto text-right">
-        <button 
-          type="button"
-          onClick={() => setActiveSubTab('financial')}
-          className={`pb-3 px-4 text-xs font-black uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
-            activeSubTab === 'financial' 
-              ? 'border-blue-600 text-blue-600' 
-              : 'border-transparent text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          📈 الأداء المالي والأرباح والرواتب
-        </button>
-        <button 
-          type="button"
-          onClick={() => setActiveSubTab('diseases')}
-          className={`pb-3 px-4 text-xs font-black uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
-            activeSubTab === 'diseases' 
-              ? 'border-blue-600 text-blue-600' 
-              : 'border-transparent text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          🦠 تصنيف وتقسيم الأمراض والتشخيصات
-        </button>
-        <button 
-          type="button"
-          onClick={() => setActiveSubTab('doctors')}
-          className={`pb-3 px-4 text-xs font-black uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
-            activeSubTab === 'doctors' 
-              ? 'border-blue-600 text-blue-600' 
-              : 'border-transparent text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          🩺 كفاءة الأطباء ومعدل تكلفة الكشف
-        </button>
-        <button 
-          type="button"
-          onClick={() => setActiveSubTab('reports')}
-          className={`pb-3 px-4 text-xs font-black uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
-            activeSubTab === 'reports' 
-              ? 'border-blue-600 text-blue-600' 
-              : 'border-transparent text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          📝 التقارير الدورية والذكاء الاصطناعي
-        </button>
-        <button 
-          type="button"
-          onClick={() => setActiveSubTab('growth')}
-          className={`pb-3 px-4 text-xs font-black uppercase tracking-wider border-b-2 transition-all whitespace-nowrap ${
-            activeSubTab === 'growth' 
-              ? 'border-blue-600 text-blue-600' 
-              : 'border-transparent text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          👥 نمو المرضى الجدد (Growth Rate)
-        </button>
-      </div>
-
-      <AnimatePresence mode="wait">
-        {activeSubTab === 'financial' && (
-          <motion.div 
-            key="financial"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.2 }}
-            className="space-y-6"
-          >
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm p-6 overflow-hidden">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="font-black text-slate-800 text-xs uppercase tracking-widest flex items-center gap-2">
-                    <TrendingUp size={16} className="text-blue-500" />
-                    مؤشرات الأداء المالي
-                  </h3>
-                  <div className="flex bg-slate-100 p-1 rounded-lg">
-                    <button 
-                      type="button"
-                      onClick={() => setChartType('bar')}
-                      className={`p-1.5 rounded-md transition-all ${chartType === 'bar' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400'}`}
-                    >
-                      <BarChartIcon size={14} />
-                    </button>
-                    <button 
-                      type="button"
-                      onClick={() => setChartType('line')}
-                      className={`p-1.5 rounded-md transition-all ${chartType === 'line' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400'}`}
-                    >
-                      <LineChartIcon size={14} />
-                    </button>
-                  </div>
-                </div>
-                
-                <div className="h-[300px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    {chartType === 'bar' ? (
-                      <BarChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                        <XAxis dataKey="name" fontSize={10} fontBold axisLine={false} tickLine={false} dy={10} />
-                        <YAxis fontSize={10} fontBold axisLine={false} tickLine={false} dx={-10} />
-                        <Tooltip 
-                          contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', padding: '12px' }}
-                          cursor={{ fill: '#F1F5F9' }}
-                        />
-                        <Legend verticalAlign="top" height={36} iconType="circle" wrapperStyle={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }} />
-                        <Bar dataKey="إيرادات" fill="#3B82F6" radius={[4, 4, 0, 0]} barSize={20} />
-                        <Bar dataKey="أرباح" fill="#10B981" radius={[4, 4, 0, 0]} barSize={20} />
-                      </BarChart>
-                    ) : (
-                      <AreaChart data={chartData}>
-                        <defs>
-                          <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.1}/>
-                            <stop offset="95%" stopColor="#3B82F6" stopOpacity={0}/>
-                          </linearGradient>
-                          <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#10B981" stopOpacity={0.1}/>
-                            <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                        <XAxis dataKey="name" fontSize={10} fontBold axisLine={false} tickLine={false} dy={10} />
-                        <YAxis fontSize={10} fontBold axisLine={false} tickLine={false} dx={-10} />
-                        <Tooltip 
-                          contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                        />
-                        <Legend verticalAlign="top" height={36} iconType="circle" wrapperStyle={{ fontSize: '10px', fontWeight: 'bold' }} />
-                        <Area type="monotone" dataKey="إيرادات" stroke="#3B82F6" strokeWidth={3} fillOpacity={1} fill="url(#colorRev)" />
-                        <Area type="monotone" dataKey="أرباح" stroke="#10B981" strokeWidth={3} fillOpacity={1} fill="url(#colorProfit)" />
-                      </AreaChart>
-                    )}
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 overflow-hidden flex flex-col">
-                <h3 className="font-black text-slate-800 text-xs uppercase tracking-widest flex items-center gap-2 mb-6">
-                  <PieChartIcon size={16} className="text-blue-500" />
-                  توزيع الإيراد حسب التخصص
-                </h3>
-                <div className="flex-1 flex flex-col justify-center">
-                  {specialtyData.length > 0 ? (
-                    <div className="h-[250px] w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={specialtyData}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={60}
-                            outerRadius={80}
-                            paddingAngle={5}
-                            dataKey="value"
-                          >
-                            {specialtyData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <Tooltip />
-                          <Legend verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: '10px', fontWeight: 'bold', paddingTop: '20px' }} />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </div>
-                  ) : (
-                    <div className="text-center py-10 text-slate-300 italic text-sm">لا توجد بيانات للفترة المختارة</div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* المقارنة السنوية الشهرية التفاعلية */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 overflow-hidden">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-                <div>
-                  <h3 className="font-black text-slate-800 text-sm flex items-center gap-2">
-                    <TrendingUp size={18} className="text-teal-600 animate-pulse" />
-                    <span>المقارنة السنوية الشهرية لعام {currentYear} 📅</span>
-                  </h3>
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">المقارنة التفاعلية بين إيرادات العيادة وصافي أرباح الأطباء شهرياً</p>
-                </div>
-                <div className="flex bg-slate-100 p-1 rounded-lg self-start sm:self-auto">
-                  <button 
-                    type="button"
-                    onClick={() => setYearlyChartType('bar')}
-                    className={`px-3 py-1.5 rounded-md text-xs font-black transition-all flex items-center gap-1 ${yearlyChartType === 'bar' ? 'bg-white shadow-sm text-teal-600 font-black' : 'text-slate-400'}`}
-                  >
-                    <BarChartIcon size={12} /> أعمدة مجمعة
-                  </button>
-                  <button 
-                    type="button"
-                    onClick={() => setYearlyChartType('line')}
-                    className={`px-3 py-1.5 rounded-md text-xs font-black transition-all flex items-center gap-1 ${yearlyChartType === 'line' ? 'bg-white shadow-sm text-teal-600 font-black' : 'text-slate-400'}`}
-                  >
-                    <LineChartIcon size={12} /> خطوط بيانية
-                  </button>
-                </div>
-              </div>
-
-              {/* Quick yearly stats summary */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6 text-right">
-                <div className="p-3 bg-teal-50/30 border border-teal-100/50 rounded-xl">
-                  <span className="text-[9px] text-slate-400 font-bold block mb-0.5">إجمالي أرباح العيادة السنوية 🏥</span>
-                  <span className="text-base font-black text-emerald-600">
-                    {yearlyMonthlyData.reduce((acc, curr) => acc + curr['إيرادات_العيادة'], 0).toLocaleString()} ج.م
-                  </span>
-                </div>
-                <div className="p-3 bg-blue-50/30 border border-blue-100/50 rounded-xl">
-                  <span className="text-[9px] text-slate-400 font-bold block mb-0.5">إجمالي أتعاب الأطباء السنوية 💵</span>
-                  <span className="text-base font-black text-blue-600">
-                    {yearlyMonthlyData.reduce((acc, curr) => acc + curr['أرباح_الأطباء'], 0).toLocaleString()} ج.م
-                  </span>
-                </div>
-                <div className="p-3 bg-slate-50 border border-slate-200/60 rounded-xl">
-                  <span className="text-[9px] text-slate-400 font-bold block mb-0.5">إجمالي الحركة المالية السنوية 💰</span>
-                  <span className="text-base font-black text-slate-800">
-                    {yearlyMonthlyData.reduce((acc, curr) => acc + curr['إجمالي_الإيرادات'], 0).toLocaleString()} ج.م
-                  </span>
-                </div>
-                <div className="p-3 bg-slate-50 border border-slate-200/60 rounded-xl">
-                  <span className="text-[9px] text-slate-400 font-bold block mb-0.5">أعلى الشهور ربحية للعيادة 📈</span>
-                  <span className="text-xs font-black text-teal-700 truncate block">
-                    {(() => {
-                      const maxMonth = [...yearlyMonthlyData].sort((a, b) => b['إيرادات_العيادة'] - a['إيرادات_العيادة'])[0];
-                      return maxMonth && maxMonth['إيرادات_العيادة'] > 0 ? `${maxMonth.name} (${maxMonth['إيرادات_العيادة'].toLocaleString()} ج.م)` : 'لا توجد بيانات';
-                    })()}
-                  </span>
-                </div>
-              </div>
-
-              <div className="h-[300px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  {yearlyChartType === 'bar' ? (
-                    <BarChart data={yearlyMonthlyData}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                      <XAxis dataKey="name" fontSize={10} fontBold axisLine={false} tickLine={false} dy={10} />
-                      <YAxis fontSize={10} fontBold axisLine={false} tickLine={false} dx={-10} />
-                      <Tooltip 
-                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', padding: '12px', direction: 'rtl', textAlign: 'right' }}
-                        cursor={{ fill: '#F1F5F9' }}
-                      />
-                      <Legend verticalAlign="top" height={36} iconType="circle" wrapperStyle={{ fontSize: '10px', fontWeight: 'bold' }} />
-                      <Bar name="صافي أرباح العيادة" dataKey="إيرادات_العيادة" fill="#10B981" radius={[4, 4, 0, 0]} barSize={25} />
-                      <Bar name="إجمالي أرباح الأطباء" dataKey="أرباح_الأطباء" fill="#3B82F6" radius={[4, 4, 0, 0]} barSize={25} />
-                    </BarChart>
-                  ) : (
-                    <AreaChart data={yearlyMonthlyData}>
-                      <defs>
-                        <linearGradient id="colorLevelClinic" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10B981" stopOpacity={0.15}/>
-                          <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
-                        </linearGradient>
-                        <linearGradient id="colorLevelDoc" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.15}/>
-                          <stop offset="95%" stopColor="#3B82F6" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                      <XAxis dataKey="name" fontSize={10} fontBold axisLine={false} tickLine={false} dy={10} />
-                      <YAxis fontSize={10} fontBold axisLine={false} tickLine={false} dx={-10} />
-                      <Tooltip 
-                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', direction: 'rtl', textAlign: 'right' }}
-                      />
-                      <Legend verticalAlign="top" height={36} iconType="circle" wrapperStyle={{ fontSize: '10px', fontWeight: 'bold' }} />
-                      <Area name="صافي أرباح العيادة" type="monotone" dataKey="إيرادات_العيادة" stroke="#10B981" strokeWidth={3} fillOpacity={1} fill="url(#colorLevelClinic)" />
-                      <Area name="إجمالي أرباح الأطباء" type="monotone" dataKey="أرباح_الأطباء" stroke="#3B82F6" strokeWidth={3} fillOpacity={1} fill="url(#colorLevelDoc)" />
-                    </AreaChart>
-                  )}
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-6">
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/20">
-                   <h3 className="font-black text-slate-800 text-xs uppercase tracking-widest flex items-center gap-2">
-                     <Users size={16} className="text-blue-500" />
-                     كشف رواتب ومستحقات الأطباء (Payroll)
-                   </h3>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-right border-collapse">
-                     <thead>
-                       <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest">
-                         <th className="px-6 py-4">اسم الطبيب</th>
-                         <th className="px-6 py-4">التخصص</th>
-                         <th className="px-6 py-4">نظام المحاسبة</th>
-                         <th className="px-6 py-4">عدد الزيارات</th>
-                         <th className="px-6 py-4">إجمالي الإيرادات</th>
-                         <th className="px-6 py-4">الاستقطاعات</th>
-                         <th className="px-6 py-4">صافي المستحق</th>
-                       </tr>
-                     </thead>
-                     <tbody className="divide-y divide-slate-50 font-bold text-sm">
-                       {doctors.map((d: any) => {
-                          const docVisits = filteredVisits.filter((v: any) => v.doctorId === d.id);
-                          const earnings = docVisits.reduce((acc: any, v: any) => acc + (v.doctorEarnings || 0), 0);
-                          const revenue = docVisits.reduce((acc: any, v: any) => acc + (v.cost || 0), 0);
-                          
-                          // Deductions placeholder
-                          const deductions = 0; 
-                          const netPay = earnings - deductions;
-
-                          if (docVisits.length === 0 && earnings === 0) return null;
-
-                          return (
-                            <tr key={d.id} className="hover:bg-slate-50 transition-colors">
-                              <td className="px-6 py-4 font-black">د. {d.name}</td>
-                              <td className="px-6 py-4 text-xs">
-                                <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-100">{d.specialty}</span>
-                              </td>
-                              <td className="px-6 py-4 text-[10px] text-slate-400 uppercase tracking-tighter">
-                                {d.accountingSystem === 'fixed' ? 'ثابت' : 
-                                 d.accountingSystem === 'percentage' ? 'نسبة' :
-                                 d.accountingSystem === 'daily' ? 'يومي' : 'هجين'}
-                              </td>
-                              <td className="px-6 py-4">{docVisits.length}</td>
-                              <td className="px-6 py-4 font-mono">{revenue} ج.م</td>
-                              <td className="px-6 py-4 font-mono text-red-500">{deductions} ج.م</td>
-                              <td className="px-6 py-4">
-                                <span className="text-emerald-600 font-mono text-lg">{netPay} ج.م</span>
-                              </td>
-                            </tr>
-                          );
-                       })}
-                       {doctors.filter((d: any) => filteredVisits.some((v: any) => v.doctorId === d.id)).length === 0 && (
-                        <tr>
-                          <td colSpan={7} className="px-6 py-20 text-center text-slate-300 italic text-sm">لا توجد بيانات رواتب للفترة المختارة</td>
-                        </tr>
-                       )}
-                     </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {activeSubTab === 'diseases' && (
-          <motion.div 
-            key="diseases"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.2 }}
-            className="space-y-6"
-          >
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <h3 className="font-black text-slate-800 text-sm flex items-center gap-1.5">
-                    <span>🦠 التصنيفات الطبية والأمراض الأكثر انتشاراً</span>
-                  </h3>
-                  <p className="text-[10px] text-slate-400 font-bold tracking-tight">ترتيب الأمراض حسب تكرار التشخيص ومعدلات الإيرادات المصاحبة لها للفترة الزمنية المحددة</p>
-                </div>
-                <button 
-                  type="button"
-                  onClick={() => exportToCSV(diagnosisBreakdown, `Diseases_Breakdown_${dateRange.start}_to_${dateRange.end}`)}
-                  className="bg-slate-105 border border-slate-200 hover:bg-slate-100 text-slate-705 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
-                >
-                  📁 تصدير ملف إحصاءات الأمراض
-                </button>
-              </div>
-
-              <div className="bg-slate-50/50 p-4 rounded-xl border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
-                <div className="p-3 bg-white rounded-lg border border-slate-100">
-                  <div className="text-[9px] text-slate-400 font-black">إجمالي التشخيصات للفترة</div>
-                  <div className="text-2xl font-black text-slate-850 mt-1">{filteredVisits.length} تشخيص</div>
-                </div>
-                <div className="p-3 bg-white rounded-lg border border-slate-100">
-                  <div className="text-[9px] text-slate-400 font-black">التشخيصات الفريدة المختلفة</div>
-                  <div className="text-2xl font-black text-blue-600 mt-1">{diagnosisBreakdown.length} نوع مرض</div>
-                </div>
-                <div className="p-3 bg-white rounded-lg border border-slate-100">
-                  <div className="text-[9px] text-slate-400 font-black">المرض الأكثر شيوعاً وعلاجاً</div>
-                  <div className="text-sm font-black text-emerald-700 mt-2 truncate">
-                    {diagnosisBreakdown[0]?.name || "لا يوجد بعد"}
-                  </div>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto border border-slate-150 rounded-xl">
-                <table className="w-full text-right border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-150">
-                      <th className="px-6 py-4">اسم التشخيص / المرض</th>
-                      <th className="px-6 py-4">عدد الحالات</th>
-                      <th className="px-6 py-4">النسبة المئوية للاستحواذ</th>
-                      <th className="px-6 py-4">إجمالي تكاليف الكشف المقابلة</th>
-                      <th className="px-6 py-4">الرسم البياني للتوزيع</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 font-bold text-sm">
-                    {diagnosisBreakdown.map((item, index) => (
-                      <tr key={index} className="hover:bg-slate-50/60 transition-colors">
-                        <td className="px-6 py-3.5 font-black text-slate-800">{item.name}</td>
-                        <td className="px-6 py-3.5 text-slate-600">{item.count} حالة</td>
-                        <td className="px-6 py-3.5 text-blue-600 font-mono text-xs">{item.percentage}%</td>
-                        <td className="px-6 py-3.5 font-mono text-emerald-600">{item.totalCost} ج.م</td>
-                        <td className="px-6 py-3.5 w-[200px]">
-                          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                            <div 
-                              className="bg-blue-650 h-full rounded-full transition-all duration-500" 
-                              style={{ width: `${item.percentage}%` }}
-                            ></div>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {diagnosisBreakdown.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="px-6 py-16 text-center text-slate-350 italic">لا توجد سجلات تشخيصات طبية للفترة المحددة</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {activeSubTab === 'doctors' && (
-          <motion.div 
-            key="doctors"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.2 }}
-            className="space-y-6"
-          >
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <h3 className="font-black text-slate-800 text-sm flex items-center gap-1.5">
-                    <span>🩺 كفاءة الأطباء والتحليل الإنتاجي والتكاليف</span>
-                  </h3>
-                  <p className="text-[10px] text-slate-400 font-bold tracking-tight">إحصائية شاملة تعرض معدل سعر الزيارة للعيادة، الحاصل المحصل للطبيب، والربح الصافي للفترة الزمنية المحددة</p>
-                </div>
-                <button 
-                  type="button"
-                  onClick={() => exportToCSV(doctorsBreakdown, `Doctors_Clinical_Power_${dateRange.start}_to_${dateRange.end}`)}
-                  className="bg-slate-105 border border-slate-200 hover:bg-slate-100 text-slate-705 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all"
-                >
-                  📁 تصدير تقرير الأطباء المفصل
-                </button>
-              </div>
-
-              <div className="overflow-x-auto border border-slate-150 rounded-xl">
-                <table className="w-full text-right border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-150">
-                      <th className="px-6 py-4">اسم الدكتور والتأهيل</th>
-                      <th className="px-6 py-4">عدد الزيارات المعالجة</th>
-                      <th className="px-6 py-4">معدل تكلفة الكشف الواحد</th>
-                      <th className="px-6 py-4">إجمالي الإيرادات</th>
-                      <th className="px-6 py-4">أتعاب الدكتور</th>
-                      <th className="px-6 py-4">صافي ربح العيادة</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 font-bold text-sm">
-                    {doctorsBreakdown.map((item: any, idx: number) => (
-                      <tr key={idx} className="hover:bg-slate-50/60 transition-colors">
-                        <td className="px-6 py-4">
-                          <p className="font-black text-slate-850">د. {item.name}</p>
-                          <span className="text-[9px] text-blue-600 bg-blue-50 border border-blue-105 px-2 py-0.5 rounded-md">{item.specialty}</span>
-                        </td>
-                        <td className="px-6 py-4 text-slate-700">{item.visitsCount} كشف</td>
-                        <td className="px-6 py-4 font-mono text-xs">{item.averageVisitCost} ج.م / كشف</td>
-                        <td className="px-6 py-4 font-mono text-slate-700">{item.totalRevenue} ج.م</td>
-                        <td className="px-6 py-4 font-mono text-blue-600">{item.doctorEarnings} ج.م</td>
-                        <td className="px-6 py-4 font-mono text-emerald-600">{item.clinicProfit} ج.م</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {/* Customized Periodic Insights & Executive Reports Tab */}
-        {activeSubTab === 'reports' && (
-          <motion.div 
-            key="reports"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.2 }}
-            className="space-y-6"
-          >
-            {/* Filter and Presets Header */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <h3 className="font-black text-slate-800 text-sm flex items-center gap-1.5">
-                  <span>⏱️ الفترة الزمنية للتقرير الدوري المخصص</span>
-                </h3>
-                <p className="text-[10px] text-slate-400 font-bold">حدد نطاق التاريخ أو استخدم الفلاتر السريعة لتخصيص محتوى الكشف الدوري</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button 
-                  type="button"
-                  onClick={() => {
-                    setPresetType('daily');
-                    setDateRange({ start: dayjs().format('YYYY-MM-DD'), end: dayjs().format('YYYY-MM-DD') });
-                  }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${presetType === 'daily' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                >
-                  اليوم (Daily)
-                </button>
-                <button 
-                  type="button"
-                  onClick={() => {
-                    setPresetType('weekly');
-                    setDateRange({ start: dayjs().subtract(6, 'day').format('YYYY-MM-DD'), end: dayjs().format('YYYY-MM-DD') });
-                  }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${presetType === 'weekly' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                >
-                  آخر 7 أيام (Weekly)
-                </button>
-                <button 
-                  type="button"
-                  onClick={() => {
-                    setPresetType('monthly');
-                    setDateRange({ start: dayjs().startOf('month').format('YYYY-MM-DD'), end: dayjs().endOf('month').format('YYYY-MM-DD') });
-                  }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${presetType === 'monthly' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                >
-                  الشهر الحالي (Monthly)
-                </button>
-                <button 
-                  type="button"
-                  onClick={() => setPresetType('custom')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${presetType === 'custom' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                >
-                  مخصص (Custom)
-                </button>
-              </div>
-            </div>
-
-            {/* Print Friendly Executive Wrapper */}
-            <div id="printable-periodic-report" className="space-y-6 text-right bg-white p-6 rounded-2xl border border-slate-200 shadow-sm relative">
-              
-              {/* Internal Report Letterhead */}
-              <div className="border-b border-double border-slate-300 pb-5 mb-5 flex justify-between items-end">
-                <div className="text-right">
-                  <h2 className="text-lg font-black text-slate-900">تقرير الأداء الدوري المتكامل والذكاء الاصطناعي 📝</h2>
-                  <p className="text-xs text-slate-450 font-bold mt-1">تاريخ استخراج التقرير: {dayjs().format('YYYY/MM/DD HH:mm')}</p>
-                </div>
-                <div className="text-left font-mono">
-                  <p className="text-sm font-black text-blue-700">شعبة المحاسبة وإدارة العيادة</p>
-                  <p className="text-[10px] text-slate-400 font-bold">نطاق التقرير: {dayjs(dateRange.start).format('YYYY/MM/DD')} - {dayjs(dateRange.end).format('YYYY/MM/DD')}</p>
-                </div>
-              </div>
-
-              {/* KPI metrics row */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="p-4 bg-slate-50/50 rounded-xl border border-slate-100">
-                  <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">إجمالي الإيرادات للفترة (Total Revenue)</span>
-                  <span className="text-lg font-black text-slate-800 font-sans">{totalRev} <span className="text-xs font-bold">ج.م</span></span>
-                  <div className="text-[9px] text-slate-400 mt-1">شاملة الحجز والكشوفات العامة</div>
-                </div>
-
-                <div className="p-4 bg-blue-50/20 rounded-xl border border-blue-50">
-                  <span className="text-[9px] font-black text-blue-700 uppercase block mb-1">صافي أرباح العيادة (Clinic Net Profit)</span>
-                  <span className="text-lg font-black text-emerald-600 font-sans">{totalClinic} <span className="text-xs font-bold">ج.م</span></span>
-                  <div className="text-[9px] text-slate-400 mt-1">بعد استقطاع رواتب وأتعاب الأطباء</div>
-                </div>
-
-                <div className="p-4 bg-slate-50/50 rounded-xl border border-slate-100">
-                  <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">مستحقات الأطباء (Doctors Payout)</span>
-                  <span className="text-lg font-black text-indigo-700 font-sans">{totalDoc} <span className="text-xs font-bold">ج.م</span></span>
-                  <div className="text-[9px] text-slate-400 mt-1">المستحقة للصرف للأطباء</div>
-                </div>
-
-                <div className="p-4 bg-rose-50/25 rounded-xl border border-rose-50">
-                  <span className="text-[9px] font-black text-rose-700 uppercase block mb-1">عدد الزيارات وحجم الإقبال (Footfall)</span>
-                  <span className="text-lg font-black text-rose-800 font-sans">{filteredVisits.length} <span className="text-xs font-bold">حالة</span></span>
-                  <div className="text-[9px] text-slate-400 mt-1">معدل الإلغاء: {filteredVisits.filter((v: any) => v.status === 'cancelled').length} حالات ملغاة</div>
-                </div>
-              </div>
-
-              {/* Outstanding Financial Dues warning */}
-              {outstandingAmount > 0 && (
-                <div className="p-3 bg-amber-50/40 border border-amber-200/50 rounded-xl flex items-center justify-between text-xs text-amber-800 font-bold">
-                  <span>⚠️ هناك مستحقات غير محصلة (معلقة/آجلة) تقدر بـ <span className="font-sans font-black text-amber-900">{outstandingAmount} ج.م</span> خلال هذه الفترة.</span>
-                  <span className="text-[9px] bg-amber-100 text-amber-950 px-2 py-0.5 rounded">يرجى متابعة الموظفين والتحصيل السريع</span>
-                </div>
-              )}
-
-              {/* Dynamic Diagnostics Ranking Breakdown Table */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pt-2">
-                <div className="lg:col-span-2 space-y-3">
-                  <h4 className="text-xs font-black text-slate-705 flex items-center gap-1.5 border-b border-slate-100 pb-2">
-                    <span>🦠 التصنيفات المرضية والتشخيصات الأكثر شيوعاً خلال الفترة</span>
-                  </h4>
-                  <div className="overflow-hidden border border-slate-150 rounded-xl bg-white">
-                    <table className="w-full text-right text-xs">
-                      <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-150">
-                        <tr>
-                          <th className="p-3">التصنيف أو المرض المشخص</th>
-                          <th className="p-3 text-center">عدد الحالات</th>
-                          <th className="p-3 text-center">نسبة الحالات (%)</th>
-                          <th className="p-3 text-left">قوة الإيراد الكلي</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 font-bold text-slate-700">
-                        {diagnosisBreakdown.slice(0, 5).map((diag: any, i: number) => (
-                          <tr key={i} className="hover:bg-slate-50/50">
-                            <td className="p-3 font-black text-slate-900">{diag.name}</td>
-                            <td className="p-3 text-center font-sans">{diag.count} حالات</td>
-                            <td className="p-3 text-center font-sans text-blue-600">{diag.percentage}%</td>
-                            <td className="p-3 text-left font-sans text-emerald-600">{diag.totalCost} ج.م</td>
-                          </tr>
-                        ))}
-                        {diagnosisBreakdown.length === 0 && (
-                          <tr>
-                            <td colSpan={4} className="p-4 text-center text-slate-400 italic font-medium">لا توجد سجلات تشخيصية كافية لهذه الفترة لتصنيف الأمراض الشائعة.</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Doctor efficiency card */}
-                <div className="space-y-3">
-                  <h4 className="text-xs font-black text-slate-705 flex items-center gap-1.5 border-b border-slate-100 pb-2">
-                    <span>🩺 توزيع الكشوفات على الأطباء</span>
-                  </h4>
-                  <div className="space-y-2">
-                    {doctorsBreakdown.map((doc: any, i: number) => (
-                      <div key={i} className="bg-slate-50/50 p-2.5 rounded-lg border border-slate-100/80 flex justify-between items-center text-xs">
-                        <div>
-                          <p className="font-extrabold text-slate-800">د. {doc.name}</p>
-                          <span className="text-[9px] text-slate-400 font-bold">{doc.specialty}</span>
-                        </div>
-                        <div className="text-left">
-                          <p className="font-black text-blue-700 font-sans">{doc.visitsCount} كشف</p>
-                          <p className="text-[9px] text-slate-400 font-mono">صافي: {doc.clinicProfit} ج.م</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* AI-Powered executive commentary insights section */}
-              <div className="border border-slate-200 rounded-xl bg-slate-50/40 p-5 mt-6 space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-150 pb-3">
-                  <div className="text-right">
-                    <h4 className="text-xs font-black text-slate-850 flex items-center gap-1.5">
-                      <span>🪄 تقرير التحليل الاستراتيجي والذكاء الاصطناعي (AI Executive Insights)</span>
-                    </h4>
-                    <p className="text-[10px] text-slate-450 font-bold">صياغة توصيات حية ورؤى مخصصة لنشاط المربح الطبي، الحالات الأكثر شيوعاً، والأطباء الأكثر إنتاجية</p>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isGeneratingInsights}
-                    onClick={handleGeneratePeriodicInsights}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-extrabold rounded-lg text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-emerald-950/15"
-                  >
-                    <span>{isGeneratingInsights ? "جاري كتابة التحليل الدوري الذكي..." : "🪄 توليد/تحديث التحليلات المخصصة بـ AI"}</span>
-                  </button>
-                </div>
-
-                {isGeneratingInsights && (
-                  <div className="py-6 flex flex-col items-center justify-center space-y-2 text-center">
-                    <div className="size-6 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
-                    <p className="text-[11px] font-bold text-slate-500">يقوم الذكاء الاصطناعي بتحليل البيانات الإحصائية والمالية وصياغة التوصيات الإدارية والطبية الصائبة...</p>
-                  </div>
-                )}
-
-                {!isGeneratingInsights && reportInsights && (
-                  <div className="p-4 bg-white border border-slate-150 rounded-xl text-xs text-slate-800 leading-relaxed space-y-2 text-right whitespace-pre-wrap font-bold font-sans">
-                    {reportInsights}
-                  </div>
-                )}
-
-                {!isGeneratingInsights && !reportInsights && (
-                  <div className="p-4 bg-slate-100/30 border border-slate-200 border-dashed rounded-xl text-center text-slate-400 italic text-xs font-medium py-6">
-                    اضغط على الزر أعلاه لتوليد تحليل استراتيجي ذكي يغطي الحالة الاقتصادية وكفاءة الكشوفات المرضية بالعيادة خلال هذه الفترة المحددة.
-                  </div>
-                )}
-              </div>
-
-              {/* Action Buttons: Printing scorecard */}
-              <div className="pt-4 flex justify-end gap-3 border-t border-slate-100 mt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const printContents = document.getElementById('printable-periodic-report')?.innerHTML;
-                    const originalContents = document.body.innerHTML;
-                    if (printContents) {
-                      document.body.innerHTML = `<div class="p-8 direction-rtl text-right font-sans" style="direction: rtl;">${printContents}</div>`;
-                      window.print();
-                      document.body.innerHTML = originalContents;
-                      window.location.reload(); // Quick refresh to restore normal working state securely
-                    }
-                  }}
-                  className="px-5 py-2.5 bg-blue-650 hover:bg-blue-700 text-white font-black text-xs rounded-xl transition-all shadow-md flex items-center gap-2 cursor-pointer"
-                >
-                  <span>🖨️ طباعة التقرير الدوري وعرض الركود</span>
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {activeSubTab === 'branch-comparison' && (
-          <motion.div 
-            key="branch-comparison"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.2 }}
-            className="space-y-6"
-          >
-            {/* Comparative Period Configuration Bar */}
-            <div className="bg-slate-50 p-4.5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <h4 className="text-xs font-black text-slate-800">🗓️ الفلتر المطور لمقارنة الفترات الزمنية المتعددة</h4>
-                  <p className="text-[10px] text-slate-450 font-bold mt-0.5">اختر فترتين زمنيتين مختلفتين للتشخيص والمقارنة المباشرة لأداء الفروع الطبي والتجاري</p>
-                </div>
-                <div className="flex flex-wrap gap-1.5 justify-end">
-                  <button 
-                    onClick={() => handleCompPresetChange('current-vs-last-month')}
-                    className={`px-3 py-1.5 rounded-xl text-[10px] font-extrabold transition-all border cursor-pointer ${
-                      compPreset === 'current-vs-last-month' 
-                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                    }`}
-                  >
-                    الشهر الحالي مقابل السابق
-                  </button>
-                  <button 
-                    onClick={() => handleCompPresetChange('current-vs-last-quarter')}
-                    className={`px-3 py-1.5 rounded-xl text-[10px] font-extrabold transition-all border cursor-pointer ${
-                      compPreset === 'current-vs-last-quarter' 
-                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                    }`}
-                  >
-                    الربع الحالي مقابل السابق
-                  </button>
-                  <button 
-                    onClick={() => handleCompPresetChange('current-vs-last-week')}
-                    className={`px-3 py-1.5 rounded-xl text-[10px] font-extrabold transition-all border cursor-pointer ${
-                      compPreset === 'current-vs-last-week' 
-                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                    }`}
-                  >
-                    الأسبوع الحالي مقابل السابق
-                  </button>
-                  <button 
-                    onClick={() => setCompPreset('custom')}
-                    className={`px-3 py-1.5 rounded-xl text-[10px] font-extrabold transition-all border cursor-pointer ${
-                      compPreset === 'custom' 
-                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                    }`}
-                  >
-                    ⚙️ تخصيص يدوي
-                  </button>
-                </div>
-              </div>
-
-              {compPreset === 'custom' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-200/50 animate-in slide-in-from-top-1 duration-200">
-                  {/* Period 1 */}
-                  <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2">
-                    <span className="text-[10px] font-black text-blue-600 block">📅 الفترة الأساسية (أ):</span>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[9px] text-slate-400 font-bold">تاريخ البدء</label>
-                        <input 
-                          type="date" 
-                          value={period1.start} 
-                          onChange={(e) => setPeriod1({ ...period1, start: e.target.value })}
-                          className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-bold" 
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] text-slate-400 font-bold">تاريخ الانتهاء</label>
-                        <input 
-                          type="date" 
-                          value={period1.end} 
-                          onChange={(e) => setPeriod1({ ...period1, end: e.target.value })}
-                          className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-bold" 
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  {/* Period 2 */}
-                  <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-2">
-                    <span className="text-[10px] font-black text-amber-600 block">📅 فترة المقارنة (ب):</span>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[9px] text-slate-400 font-bold">تاريخ البدء</label>
-                        <input 
-                          type="date" 
-                          value={period2.start} 
-                          onChange={(e) => setPeriod2({ ...period2, start: e.target.value })}
-                          className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-bold" 
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] text-slate-400 font-bold">تاريخ الانتهاء</label>
-                        <input 
-                          type="date" 
-                          value={period2.end} 
-                          onChange={(e) => setPeriod2({ ...period2, end: e.target.value })}
-                          className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-bold" 
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Status display of selected ranges */}
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 bg-white px-3 py-2 rounded-xl text-[10px] font-bold text-slate-650 border border-slate-200">
-                <span className="text-slate-400">نطاق المقارنة المطبق:</span>
-                <span className="flex items-center gap-1">
-                  <span className="size-1.5 bg-blue-500 rounded-full animate-pulse" />
-                  الفترة أ: ({dayjs(period1.start).format('DD MMMM YYYY')} إلى {dayjs(period1.end).format('DD MMMM YYYY')})
-                </span>
-                <span className="text-slate-300 font-sans font-normal">|</span>
-                <span className="flex items-center gap-1">
-                  <span className="size-1.5 bg-slate-400 rounded-full" />
-                  الفترة ب: ({dayjs(period2.start).format('DD MMMM YYYY')} إلى {dayjs(period2.end).format('DD MMMM YYYY')})
-                </span>
-              </div>
-            </div>
-
-            {/* Top Cards Grid for general overview with Growth indicators */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              {branchComparisonData.map((branch) => {
-                const isRevUp = branch.revenueGrowth >= 0;
-                const isApptsUp = branch.appointmentsGrowth >= 0;
-
-                return (
-                  <div key={branch.name} className="bg-white p-5 rounded-2xl border border-slate-205 shadow-sm relative overflow-hidden flex flex-col justify-between hover:shadow-md transition-all text-right">
-                    <div className="absolute top-0 right-0 h-1 w-full bg-blue-500" />
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-black text-slate-400 uppercase">فرع العيادة</span>
-                        <span className="text-[8px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md font-bold">بين فترتين</span>
-                      </div>
-                      <h4 className="text-sm font-black text-slate-800 mt-1">{branch.name}</h4>
-                    </div>
-                    
-                    <div className="mt-4 space-y-2.5 text-xs text-slate-500 font-semibold">
-                      {/* Revenue with Growth Badge */}
-                      <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[10px] text-slate-400">
-                          <span>الإيرادات (أ مقابل ب):</span>
-                          <span className={`text-[8.5px] font-black px-1.5 py-0.5 rounded-full flex items-center gap-0.5 ${
-                            isRevUp ? 'bg-emerald-50 text-emerald-700 border border-emerald-150' : 'bg-rose-50 text-rose-700 border border-rose-150'
-                          }`}>
-                            {isRevUp ? '▲' : '▼'} {Math.abs(branch.revenueGrowth)}%
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-baseline">
-                          <strong className="text-slate-800 font-sans text-[13px]">{branch.revenue1.toLocaleString()} ج.م</strong>
-                          <span className="text-[10px] text-slate-400 font-sans font-medium line-through">{branch.revenue2.toLocaleString()} ج.م</span>
-                        </div>
-                      </div>
-
-                      {/* Appointments with Growth Badge */}
-                      <div className="space-y-1 pt-2 border-t border-slate-100">
-                        <div className="flex justify-between items-center text-[10px] text-slate-400">
-                          <span>المواعيد المحجوزة:</span>
-                          <span className={`text-[8.5px] font-black px-1.5 py-0.5 rounded-full flex items-center gap-0.5 ${
-                            isApptsUp ? 'bg-indigo-50 text-indigo-700 border border-indigo-150' : 'bg-amber-50 text-amber-700 border border-amber-150'
-                          }`}>
-                            {isApptsUp ? '▲' : '▼'} {Math.abs(branch.appointmentsGrowth)}%
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-baseline">
-                          <strong className="text-slate-800 font-sans">{branch.appointments1} موعد</strong>
-                          <span className="text-[10px] text-slate-400 font-sans">{branch.appointments2} سابقاً</span>
-                        </div>
-                      </div>
-
-                      {/* Occupancy compared */}
-                      <div className="flex justify-between items-center text-[10px] bg-slate-50 p-2 rounded-xl border border-slate-150">
-                        <span>معدل الإشغال الصافي:</span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-amber-600 font-black font-sans">{branch.occupancyRate1}%</span>
-                          <span className="text-[8px] text-slate-400 font-sans">
-                            (مقابل {branch.occupancyRate2}%)
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Visual Charts Comparison Area */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Financial comparison chart */}
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-3">
-                <div className="text-right">
-                  <h3 className="text-xs font-black text-slate-700">📊 مقارنة إجمالي الإيرادات المباشرة بين الفترتين</h3>
-                  <p className="text-[10px] text-slate-400 font-bold mt-0.5">تحليل الإيرادات المحققة في الفترة الحالية (أ) مقابل الفترة السابقة/المقارنة (ب)</p>
-                </div>
-                <div className="h-80 w-full pt-4">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={branchComparisonData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                      <XAxis dataKey="name" tick={{ fontSize: 10, fontWeight: 'bold' }} stroke="#94A3B8" />
-                      <YAxis tick={{ fontSize: 10, fontWeight: 'bold' }} stroke="#94A3B8" />
-                      <Tooltip 
-                        contentStyle={{ fontSize: '11px', fontWeight: 'bold', textAlign: 'right', borderRadius: '10px' }} 
-                        formatter={(value: any) => [`${value} ج.م`]} 
-                      />
-                      <Legend wrapperStyle={{ fontSize: '10px', fontWeight: 'bold' }} />
-                      <Bar dataKey="revenue1" name="إيرادات الفترة أ" fill="#3B82F6" radius={[6, 6, 0, 0]} />
-                      <Bar dataKey="revenue2" name="إيرادات الفترة ب" fill="#94A3B8" radius={[6, 6, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* Patient engagement comparison chart */}
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-3">
-                <div className="text-right">
-                  <h3 className="text-xs font-black text-slate-700">👥 مقارنة كثافة المرضى النشطين بالفروع</h3>
-                  <p className="text-[10px] text-slate-400 font-bold mt-0.5">عدد الحالات الفريدة التي قامت بزيارات فعلية خلال الفترة (أ) مقابل الفترة (ب)</p>
-                </div>
-                <div className="h-80 w-full pt-4">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={branchComparisonData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                      <XAxis dataKey="name" tick={{ fontSize: 10, fontWeight: 'bold' }} stroke="#94A3B8" />
-                      <YAxis tick={{ fontSize: 10, fontWeight: 'bold' }} stroke="#94A3B8" />
-                      <Tooltip 
-                        contentStyle={{ fontSize: '11px', fontWeight: 'bold', textAlign: 'right', borderRadius: '10px' }} 
-                        formatter={(value: any) => [`${value} مريض`]} 
-                      />
-                      <Legend wrapperStyle={{ fontSize: '10px', fontWeight: 'bold' }} />
-                      <Bar dataKey="patients1" name="نشطين الفترة أ" fill="#EC4899" radius={[6, 6, 0, 0]} />
-                      <Bar dataKey="patients2" name="نشطين الفترة ب" fill="#F472B6" opacity={0.6} radius={[6, 6, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </div>
-
-            {/* Occupancy and Schedules Analysis Card */}
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-              <div className="text-right">
-                <h3 className="text-xs font-black text-slate-705">📈 منحنى الإشغال واستغلال طاقة العيادات المقارن</h3>
-                <p className="text-[10px] text-slate-400 font-bold mt-0.5 font-sans">تطوير نسبة إشغال طاقات الغرف والعيادات للفترة الحالية (أ) مقابل الفترة للمقارنة (ب)</p>
-              </div>
-              <div className="h-72 w-full pt-2">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={branchComparisonData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.2} />
-                        <stop offset="95%" stopColor="#F59E0B" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                    <XAxis dataKey="name" tick={{ fontSize: 10, fontWeight: 'bold' }} stroke="#94A3B8" />
-                    <YAxis tick={{ fontSize: 10, fontWeight: 'bold' }} stroke="#94A3B8" />
-                    <Tooltip 
-                      contentStyle={{ fontSize: '11px', fontWeight: 'bold', textAlign: 'right', borderRadius: '10px' }} 
-                      formatter={(value: any) => [`${value}%`]} 
-                    />
-                    <Legend wrapperStyle={{ fontSize: '10px', fontWeight: 'bold' }} />
-                    <Area type="monotone" dataKey="occupancyRate1" name="معدل إشغال الفترة أ (%)" stroke="#F59E0B" fillOpacity={1} fill="url(#colorRate)" strokeWidth={2.5} />
-                    <Area type="monotone" dataKey="occupancyRate2" name="معدل إشغال الفترة ب (%)" stroke="#94A3B8" fillOpacity={0.4} strokeDasharray="4 4" strokeWidth={1.5} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* Performance score table */}
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="p-5 border-b border-slate-100 text-right">
-                <div>
-                  <h3 className="text-xs font-black text-slate-705">📊 بطاقة الأداء المقارن التفصيلية بين فترتين</h3>
-                  <p className="text-[10px] text-slate-400 font-bold mt-0.5">جدول البيانات المتكامل لمؤشرات كفاءة وإيرادات العائد للفترات المحددة أ وب للفروع</p>
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-right border-collapse" dir="rtl">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase border-b border-slate-150">
-                      <th className="px-6 py-4">الفرع الطبي</th>
-                      <th className="px-6 py-4">إيرادات أ</th>
-                      <th className="px-6 py-4">إيرادات ب</th>
-                      <th className="px-6 py-4">النمو الإيرادي</th>
-                      <th className="px-6 py-4">موعد أ</th>
-                      <th className="px-6 py-4">موعد ب</th>
-                      <th className="px-6 py-4">أشغال أ</th>
-                      <th className="px-6 py-4">أشغال ب</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                    {branchComparisonData.map((branch) => {
-                      const isRevUp = branch.revenueGrowth >= 0;
-
-                      return (
-                        <tr key={branch.name} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="px-6 py-4 text-slate-900 font-extrabold">{branch.name}</td>
-                          <td className="px-6 py-4 font-mono text-blue-700">{branch.revenue1.toLocaleString()} ج.م</td>
-                          <td className="px-6 py-4 font-mono text-slate-400">{branch.revenue2.toLocaleString()} ج.م</td>
-                          <td className="px-6 py-4">
-                            <span className={`px-2 py-0.5 rounded font-bold ${
-                              isRevUp ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
-                            }`}>
-                              {isRevUp ? '▲ +' : '▼ '} {branch.revenueGrowth}%
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 font-mono text-indigo-700">{branch.appointments1}</td>
-                          <td className="px-6 py-4 font-mono text-slate-400">{branch.appointments2}</td>
-                          <td className="px-6 py-4 font-mono text-amber-700">{branch.occupancyRate1}%</td>
-                          <td className="px-6 py-4 font-mono text-slate-450">{branch.occupancyRate2}%</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {activeSubTab === 'growth' && (
-          <motion.div 
-            key="growth"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.2 }}
-            className="space-y-6"
-          >
-            {/* Top Cards Bento Grid for Patient Growth Overview */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              {/* Card 1: Total Registered Patients */}
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden flex flex-col justify-between">
-                <div className="absolute top-0 right-0 h-1 w-full bg-blue-500" />
-                <div>
-                  <span className="text-[10px] font-black text-slate-400 block uppercase">إحصائيات المنظومة</span>
-                  <h4 className="text-sm font-black text-slate-800 mt-0.5">إجمالي المرضى بالعيادة</h4>
-                </div>
-                <div className="mt-4">
-                  <div className="text-3xl font-black text-slate-900 font-sans">{finalPatients.length} <span className="text-sm font-bold text-slate-400">مريض</span></div>
-                  <p className="text-[10px] text-slate-400 font-bold mt-1">تراكمي منذ انطلاق السيستم</p>
-                </div>
-              </div>
-
-              {/* Card 2: New Registrations This Month */}
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden flex flex-col justify-between">
-                <div className="absolute top-0 right-0 h-1 w-full bg-indigo-500" />
-                <div>
-                  <span className="text-[10px] font-black text-slate-400 block uppercase">شهرياً</span>
-                  <h4 className="text-sm font-black text-slate-800 mt-0.5">المرضى الجدد هذا الشهر</h4>
-                </div>
-                <div className="mt-4">
-                  <div className="text-3xl font-black text-indigo-600 font-sans">
-                    {patientGrowthData[patientGrowthData.length - 1]?.count || 0} <span className="text-sm font-bold text-slate-400">مسجل</span>
-                  </div>
-                  <p className="text-[10px] text-slate-400 font-bold mt-1">مقابل الشهر السابق مباشرة</p>
-                </div>
-              </div>
-
-              {/* Card 3: MoM Avg Growth Rate */}
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden flex flex-col justify-between">
-                <div className="absolute top-0 right-0 h-1 w-full bg-emerald-500" />
-                <div>
-                  <span className="text-[10px] font-black text-slate-400 block uppercase">معدلات الأداء</span>
-                  <h4 className="text-sm font-black text-slate-800 mt-0.5">متوسط معدل النمو الشهري</h4>
-                </div>
-                <div className="mt-4">
-                  <div className="text-3xl font-black text-emerald-600 font-sans">
-                    {(() => {
-                      const rates = patientGrowthData.slice(1).map(d => d.growthRate);
-                      const avg = rates.length > 0 ? rates.reduce((sum, val) => sum + val, 0) / rates.length : 0;
-                      return Math.round(avg * 10) / 10;
-                    })()}%
-                  </div>
-                  <p className="text-[10px] text-slate-400 font-bold mt-1">متوسط التدفق الدوري ربع السنوي</p>
-                </div>
-              </div>
-
-              {/* Card 4: Peak Growth Month */}
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden flex flex-col justify-between">
-                <div className="absolute top-0 right-0 h-1 w-full bg-amber-500" />
-                <div>
-                  <span className="text-[10px] font-black text-slate-400 block uppercase">القمة القياسية</span>
-                  <h4 className="text-sm font-black text-slate-800 mt-0.5">الشهر الأعلى نمواً</h4>
-                </div>
-                <div className="mt-4">
-                  {(() => {
-                    const sortedData = [...patientGrowthData.slice(1)].sort((a, b) => b.growthRate - a.growthRate);
-                    const peak = sortedData[0];
-                    return (
-                      <div>
-                        <div className="text-xl font-black text-amber-600 font-sans">+{peak?.growthRate || 0}%</div>
-                        <p className="text-[10px] text-slate-500 font-bold mt-1">في شهر {peak?.label || 'غير محدد'}</p>
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
-            </div>
-
-            {/* Charts Section */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Volume Bar Chart */}
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-3">
-                <div>
-                  <h3 className="text-xs font-black text-slate-700">📊 حجم وفود وتسجيل المرضى الجدد شهرياً</h3>
-                  <p className="text-[10px] text-slate-400 font-bold mt-0.5">العدد الفعلي للمرضى الجدد المضافين إلى النظام على مدار آخر 12 شهراً</p>
-                </div>
-                <div className="h-80 w-full pt-4">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={patientGrowthData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                      <XAxis dataKey="label" tick={{ fontSize: 9, fontWeight: 'bold' }} stroke="#94A3B8" />
-                      <YAxis tick={{ fontSize: 10, fontWeight: 'bold' }} stroke="#94A3B8" />
-                      <Tooltip 
-                        contentStyle={{ fontSize: '11px', fontWeight: 'bold', textAlign: 'right', borderRadius: '10px' }} 
-                        formatter={(value: any) => [`${value} مريض جدد`]} 
-                      />
-                      <Legend wrapperStyle={{ fontSize: '10px', fontWeight: 'bold' }} />
-                      <Bar dataKey="count" name="المرضى الجدد" fill="#6366F1" radius={[6, 6, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* MoM Growth Rate Area Chart */}
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-3">
-                <div>
-                  <h3 className="text-xs font-black text-slate-700">📈 منحنى معدل النمو المتوازي % (Growth Rate)</h3>
-                  <p className="text-[10px] text-slate-400 font-bold mt-0.5">النسبة المئوية لزيادة (أو تباطؤ) التسجيل مقارنة دائماً بالشهر الذي يسبقه</p>
-                </div>
-                <div className="h-80 w-full pt-4">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={patientGrowthData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="colorGrowth" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10B981" stopOpacity={0.2} />
-                          <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                      <XAxis dataKey="label" tick={{ fontSize: 9, fontWeight: 'bold' }} stroke="#94A3B8" />
-                      <YAxis tick={{ fontSize: 10, fontWeight: 'bold' }} stroke="#94A3B8" />
-                      <Tooltip 
-                        contentStyle={{ fontSize: '11px', fontWeight: 'bold', textAlign: 'right', borderRadius: '10px' }} 
-                        formatter={(value: any) => [`${value}%`]} 
-                      />
-                      <Legend wrapperStyle={{ fontSize: '10px', fontWeight: 'bold' }} />
-                      <Area type="monotone" dataKey="growthRate" name="معدل النمو الشهري (%)" stroke="#10B981" fillOpacity={1} fill="url(#colorGrowth)" strokeWidth={2.5} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </div>
-
-            {/* Growth Analytics Details Table */}
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-                <div>
-                  <h3 className="text-xs font-black text-slate-705">📊 جدول المؤشرات التفصيلي لنمو المرضى</h3>
-                  <p className="text-[10px] text-slate-400 font-bold mt-0.5">تفصيل الحالات وحسابات الدفق شهراً بشهر مع التباين والتحليل النسبي</p>
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-right border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-150">
-                      <th className="px-6 py-4">التاريخ / الشهر</th>
-                      <th className="px-6 py-4">المرضى الجدد المسجلين</th>
-                      <th className="px-6 py-4">حالة التغير الدوري</th>
-                      <th className="px-6 py-4 text-center">نسبة النمو الشهري (MoM Growth %)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-705">
-                    {patientGrowthData.map((data, index) => {
-                      const isPositive = data.growthRate >= 0;
-                      return (
-                        <tr key={data.monthKey} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="px-6 py-4 text-slate-900 font-extrabold">{data.label}</td>
-                          <td className="px-6 py-4 font-mono text-slate-800">{data.count} مريض جديد</td>
-                          <td className="px-6 py-4">
-                            {index === 0 ? (
-                              <span className="text-slate-400">- شهري تمهيدي -</span>
-                            ) : data.growthRate > 0 ? (
-                              <span className="text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-[10px]">📈 زيادة نشاط</span>
-                            ) : data.growthRate < 0 ? (
-                              <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded text-[10px]">📉 تباطؤ نسبي</span>
-                            ) : (
-                              <span className="text-slate-500 bg-slate-50 px-2 py-0.5 rounded text-[10px]">➖ استقرار عددي</span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            {index === 0 ? (
-                              <span className="text-slate-400 font-mono">0%</span>
-                            ) : (
-                              <span className={`px-2 py-1 rounded font-mono ${
-                                isPositive && data.growthRate > 0 ? 'bg-emerald-50 text-emerald-700' :
-                                !isPositive ? 'bg-red-50 text-red-700' :
-                                'bg-slate-50 text-slate-700'
-                              }`}>
-                                {isPositive ? `+${data.growthRate}` : data.growthRate}%
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
-  );
-}
-
-function InventoryView({ inventory, onRefresh, selectedBranch }: { inventory: InventoryItem[], onRefresh: () => void, key?: string, selectedBranch: string }) {
-  const [isAdding, setIsAdding] = useState(false);
-  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
-  const [search, setSearch] = useState("");
-  const [filterExpiring, setFilterExpiring] = useState(false);
-  const [storeSectionTab, setStoreSectionTab] = useState<'all' | 'medical' | 'non-medical'>('all');
-
-  const isLowStock = (item: InventoryItem) => item.quantity <= item.reorderPoint;
-  const isExpiringSoon = (date?: string) => {
-    if (!date) return false;
-    return dayjs(date).diff(dayjs(), 'month') <= 3 && dayjs(date).diff(dayjs(), 'month') >= 0;
-  };
-  const isExpired = (date?: string) => {
-    if (!date) return false;
-    return dayjs(date).isBefore(dayjs());
-  };
-
-  const filteredInventory = inventory.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(search.toLowerCase()) || 
-                         item.category.toLowerCase().includes(search.toLowerCase());
-    
-    // Store type section filter
-    const matchesStoreSection = storeSectionTab === 'all' || 
-                                (storeSectionTab === 'medical' && (!item.storeType || item.storeType === 'medical')) ||
-                                (storeSectionTab === 'non-medical' && item.storeType === 'non-medical');
-
-    if (filterExpiring) {
-      return matchesSearch && matchesStoreSection && (isExpired(item.expirationDate) || isExpiringSoon(item.expirationDate));
-    }
-    return matchesSearch && matchesStoreSection;
-  });
-
-  const handleDelete = async (id: string) => {
-    if (confirm("هل أنت متأكد من حذف هذا الصنف؟")) {
-      await api.deleteInventoryItem(id);
-      onRefresh();
-    }
-  };
-
-  const handleApproveByMustafa = async (item: InventoryItem) => {
-    await api.updateInventoryItem(item.id, {
-      ...item,
-      approvalStatus: 'approved',
-      lastApprovedBy: 'مصطفى فتحي'
-    });
-    onRefresh();
-  };
-
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
-      
-      {/* 🛡️ Authority & Approval Matrix Dashboard Banner */}
-      <div className="bg-gradient-to-r from-blue-900 via-[#1E293B] to-slate-900 text-white p-5 rounded-2xl border border-slate-805 shadow-xl space-y-3 relative overflow-hidden text-right" dir="rtl">
-        <div className="absolute top-0 left-0 h-full w-40 bg-gradient-to-r from-blue-500/10 to-transparent pointer-events-none" />
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <div className="flex items-center gap-2 justify-end">
-              <span className="bg-emerald-500 text-slate-950 text-[9px] font-black px-2.5 py-0.5 rounded-full uppercase">سلسلة الاعتمادات مستمرة</span>
-              <h3 className="text-sm font-black tracking-wide text-slate-100">مصادقة جودة المخزون والمستلزمات (Quality Council Sign-Off)</h3>
-            </div>
-            <p className="text-[11px] text-slate-400 font-bold mt-1 max-w-3xl leading-relaxed">
-              وفقاً لدليل الجودة، تنقسم مستودعات العيادة الفرعية إلى مستودع طبي ومستودع غير طبي. تخضع كافة الإضافات والتحركات بالمخزن لمصفوفة صلاحيات خطية تنتهي بالاعتماد النهائي والتوقيع من مدير الشؤون الإدارية <span className="text-emerald-400 font-black">الأستاذ / مصطفى فتحي</span>.
-            </p>
-          </div>
-          <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/50 flex flex-col items-center justify-center min-w-[140px]">
-            <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">الاعتماد النهائي</span>
-            <span className="text-xs font-black text-emerald-400 mt-1">أ. مصطفى فتحي</span>
-            <span className="text-[8px] text-slate-500 mt-0.5 font-bold">مدير الشؤون الإدارية</span>
-          </div>
-        </div>
-      </div>
-
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-        <div>
-          <h1 className="text-2xl font-black text-slate-800 tracking-tight">المخزن والمستلزمات</h1>
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">تتبع الأدوية والمستلزمات الطبية وتاريخ الصلاحية</p>
-        </div>
-        <button 
-          onClick={() => setIsAdding(true)}
-          className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/10 text-sm"
-        >
-          <Package size={18} />
-          <span>إضافة صنف جديد للمستودع</span>
-        </button>
-      </header>
-
-      {/* Store Section Tab Selector Grid */}
-      <div className="flex bg-slate-100 p-1.5 rounded-xl border border-slate-200 justify-end max-w-md mr-auto select-none">
-        <button 
-          type="button" 
-          onClick={() => setStoreSectionTab('non-medical')}
-          className={`flex-1 px-4 py-2 rounded-lg text-xs font-black transition-all text-center ${storeSectionTab === 'non-medical' ? 'bg-white text-amber-600 shadow-sm border border-slate-200/20' : 'text-slate-400 hover:text-slate-600'}`}
-        >
-          📦 مستودع فرعي غير طبي
-        </button>
-        <button 
-          type="button" 
-          onClick={() => setStoreSectionTab('medical')}
-          className={`flex-1 px-4 py-2 rounded-lg text-xs font-black transition-all text-center ${storeSectionTab === 'medical' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200/20' : 'text-slate-400 hover:text-slate-600'}`}
-        >
-          🏥 مستودع المستلزمات الطبية
-        </button>
-        <button 
-          type="button" 
-          onClick={() => setStoreSectionTab('all')}
-          className={`flex-1 px-4 py-2 rounded-lg text-xs font-black transition-all text-center ${storeSectionTab === 'all' ? 'bg-white text-slate-800 shadow-sm border border-slate-200/20' : 'text-slate-400 hover:text-slate-600'}`}
-        >
-          الجمـيع ({inventory.length})
-        </button>
-      </div>
-
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center">
-        <div className="relative flex-1 w-full">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-          <input 
-            type="text" 
-            placeholder="بحث بالاسم أو النوع بالمخزن المقابل..." 
-            className="w-full pr-10 pl-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm text-right"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={() => setFilterExpiring(!filterExpiring)}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all border flex items-center gap-2 ${filterExpiring ? 'bg-red-50 text-red-600 border-red-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}
-          >
-            <AlertTriangle size={14} />
-            أصناف منتهية أو قاربت على الانتهاء
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-right border-collapse">
-            <thead>
-              <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-200">
-                <th className="px-6 py-4">الصنف وبيانات الاستحقاق</th>
-                <th className="px-6 py-4">المستودع ومصفوفة الاعتماد</th>
-                <th className="px-6 py-4">النوع في المستودع</th>
-                <th className="px-6 py-4">الكمية الحالية</th>
-                <th className="px-6 py-4">حد الطلب</th>
-                <th className="px-6 py-4">تاريخ الصلاحية</th>
-                <th className="px-6 py-4 text-left">الإجراءات والاعتمادات</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50 text-sm">
-              {filteredInventory.map((item) => (
-                <tr key={item.id} className={`hover:bg-slate-50 transition-colors ${isLowStock(item) ? 'bg-amber-50/30' : ''}`}>
-                  <td className="px-6 py-4">
-                    <div className="font-bold text-slate-800">{item.name}</div>
-                    <div className="text-[10px] text-slate-400">آخر تحديث: {dayjs(item.lastUpdated).fromNow()}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex flex-col gap-1">
-                      <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase w-fit ${item.storeType === 'non-medical' ? 'bg-amber-100 text-amber-705 text-amber-700' : 'bg-indigo-100 text-indigo-700'}`}>
-                        {item.storeType === 'non-medical' ? '📦 مستودع غير طبي' : '🏥 مستودع طبي فرعي'}
-                      </span>
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <span className={`size-1.5 rounded-full ${item.approvalStatus === 'approved' ? 'bg-emerald-500' : item.approvalStatus === 'rejected' ? 'bg-rose-500' : 'bg-slate-400'}`} />
-                        <span className="text-[9px] font-extrabold text-slate-500">
-                          {item.approvalStatus === 'approved' ? `معتمد (أ. ${item.lastApprovedBy || 'مصطفى فتحي'})` : item.approvalStatus === 'rejected' ? 'طلب مرفوض' : 'معلق بقيد مراجعة الاعتماد الإداري'}
-                        </span>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase">
-                      {item.category === 'medication' ? 'دواء' : 
-                       item.category === 'disposable' ? 'مستلزم' : 
-                       item.category === 'equipment' ? 'جهاز' : 'أخرى'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 font-black">
-                    <div className="flex items-center gap-2">
-                      <span className={isLowStock(item) ? 'text-amber-600' : 'text-slate-700'}>
-                        {item.quantity} {item.unit}
-                      </span>
-                      {isLowStock(item) && <AlertTriangle size={14} className="text-amber-500" />}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-slate-400 font-bold">{item.reorderPoint} {item.unit}</td>
-                  <td className="px-6 py-4">
-                    {item.expirationDate ? (
-                      <div className="flex flex-col">
-                        <span className={isExpired(item.expirationDate) ? 'text-red-500 font-black' : isExpiringSoon(item.expirationDate) ? 'text-amber-500 font-black' : 'text-slate-600'}>
-                          {dayjs(item.expirationDate).format('YYYY/MM/DD')}
-                        </span>
-                        {isExpired(item.expirationDate) && <span className="text-[9px] text-red-500 uppercase font-black">منتهي الصلاحية</span>}
-                        {isExpiringSoon(item.expirationDate) && !isExpired(item.expirationDate) && <span className="text-[9px] text-amber-500 uppercase font-black">ينتهي قريباً</span>}
-                      </div>
-                    ) : (
-                      <span className="text-slate-300 italic">N/A</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 text-left font-bold">
-                    <div className="flex items-center gap-2 justify-end">
-                      {item.approvalStatus !== 'approved' && (
-                        <button
-                          type="button"
-                          onClick={() => handleApproveByMustafa(item)}
-                          title="اعتماد هذا الصنف بالصلاحية الإدارية لـ مصطفى فتحي"
-                          className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 px-2.5 py-1 rounded text-[10px] font-black flex items-center gap-1 transition-all border border-emerald-200"
-                        >
-                          ✍️ اعتماد الصنف (أ. مصطفى فتحي)
-                        </button>
-                      )}
-                      <button onClick={() => setEditingItem(item)} className="p-1.5 hover:bg-blue-50 text-slate-400 hover:text-blue-600 rounded transition-all" title="تعديل"><FileText size={16} /></button>
-                      <button onClick={() => handleDelete(item.id)} className="p-1.5 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded transition-all" title="حذف"><X size={16} /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {filteredInventory.length === 0 && (
-                <tr>
-                   <td colSpan={7} className="px-6 py-20 text-center text-slate-300 italic">لا توجد أصناف تطابق هذا البحث أو الفئة بالمخزن حالياً</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <AnimatePresence>
-        {(isAdding || editingItem) && (
-          <InventoryModal 
-            onClose={() => { setIsAdding(false); setEditingItem(null); }} 
-            onSubmit={async (data) => {
-              if (editingItem) {
-                await api.updateInventoryItem(editingItem.id, data);
-              } else {
-                await api.addInventoryItem({ ...data, branch: selectedBranch });
-              }
-              setIsAdding(false);
-              setEditingItem(null);
-              onRefresh();
-            }}
-            initialData={editingItem}
-          />
-        )}
-      </AnimatePresence>
-    </motion.div>
-  );
-}
-
-function InventoryModal({ onClose, onSubmit, initialData }: any) {
-  const [formData, setFormData] = useState({
-    name: initialData?.name || "",
-    category: initialData?.category || "medication",
-    quantity: initialData?.quantity || 0,
-    unit: initialData?.unit || "عبوة",
-    reorderPoint: initialData?.reorderPoint || 0,
-    expirationDate: initialData?.expirationDate || "",
-    storeType: initialData?.storeType || "medical",
-    approvalStatus: initialData?.approvalStatus || "pending",
-    lastApprovedBy: initialData?.lastApprovedBy || ""
-  });
-
-  return (
-    <div 
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-[2px]"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.98, y: 10 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.98, y: 10 }}
-        className="bg-white w-full max-w-lg rounded-xl overflow-hidden shadow-2xl border border-slate-200"
-      >
-        <div className="p-5 bg-white border-b border-slate-100 flex items-center justify-between">
-          <h2 className="text-lg font-black text-slate-800">{initialData ? 'تعديل الصنف والمستلزم المستودعي' : 'إضافة صنف جديد مستودعي'}</h2>
-          <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-lg transition-colors text-slate-400"><X size={20} /></button>
-        </div>
-        <form className="p-6 space-y-4 text-right" onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }}>
-          
-          {/* Store Type Classification Tab Selector */}
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-404 text-slate-400 uppercase tracking-widest leading-loose">تصنيف مخزن العيادة (طب ومستلزمات vs غير طبي)</label>
-            <div className="flex gap-2">
-              <button 
-                type="button" 
-                onClick={() => setFormData({...formData, storeType: 'medical'})}
-                className={`flex-1 py-2 rounded-lg font-bold text-xs border ${formData.storeType === 'medical' ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-slate-50 border-slate-200 text-slate-400'}`}
-              >
-                🏥 مستودع طبي (أدوية ومعدات)
-              </button>
-              <button 
-                type="button" 
-                onClick={() => setFormData({...formData, storeType: 'non-medical'})}
-                className={`flex-1 py-2 rounded-lg font-bold text-xs border ${formData.storeType === 'non-medical' ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-slate-50 border-slate-200 text-slate-400'}`}
-              >
-                📦 مستودع فرعي غير طبي (قرطاسية ومستلزمات عامة)
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1 col-span-2">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">اسم الصنف</label>
-              <input required type="text" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">النوع</label>
-              <select className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.category} onChange={(e) => setFormData({...formData, category: e.target.value as any})}>
-                <option value="medication">دواء / علاج</option>
-                <option value="disposable">مستلزمات طبية</option>
-                <option value="equipment">أجهزة ومعدات</option>
-                <option value="other font-sans">أخرى / مأكولات ومستودعية</option>
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">وحدة القياس</label>
-              <input required type="text" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm" value={formData.unit} onChange={(e) => setFormData({...formData, unit: e.target.value})} placeholder="مثال: عبوة، قطعة" />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">الكمية الحالية</label>
-              <input required type="number" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.quantity} onChange={(e) => setFormData({...formData, quantity: Number(e.target.value)})} />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">حد إعادة الطلب</label>
-              <input required type="number" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm font-bold" value={formData.reorderPoint} onChange={(e) => setFormData({...formData, reorderPoint: Number(e.target.value)})} />
-            </div>
-            <div className="space-y-1 col-span-2">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-loose">تاريخ الصلاحية (اختياري)</label>
-              <input type="date" className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all text-sm" value={formData.expirationDate} onChange={(e) => setFormData({...formData, expirationDate: e.target.value})} />
-            </div>
-          </div>
-          <div className="pt-4 flex gap-3">
-            <button type="submit" className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-900/10 text-sm">حفظ الصنف</button>
-            <button type="button" onClick={onClose} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-lg hover:bg-slate-200 text-sm">إلغاء</button>
-          </div>
-        </form>
-      </motion.div>
-    </div>
-  );
-}
+/* Obsolete monolithic views are now modularized under components/ */
 
 function AppointmentsView({ appointments, doctors, patients, onRefresh, onSelectPatient, selectedBranch, currentUser }: { appointments: Appointment[], doctors: Doctor[], patients: Patient[], onRefresh: () => void, onSelectPatient?: (id: string, appointmentId?: string) => void, key?: string, selectedBranch: string, currentUser?: any }) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -10652,7 +9556,7 @@ function AppointmentsView({ appointments, doctors, patients, onRefresh, onSelect
                   ) : isDraggingActive ? (
                     <span className="text-[9px] text-indigo-400 font-bold">اسحب الموعد لهنا 📥</span>
                   ) : (
-                    <span className="text-[9px] text-slate-500 font-bold">متاح للنقل 🔗</span>
+                    <span className="text-[9px] text-slate-300 font-bold">متاح للنقل 🔗</span>
                   )}
                 </div>
               </div>
@@ -10661,222 +9565,107 @@ function AppointmentsView({ appointments, doctors, patients, onRefresh, onSelect
         </div>
       </div>
 
-      {/* أدوات البحث والتصفية */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-        <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
-          <span>🔍 أدوات التصفية والبحث المتقدم في المواعيد والعيادات</span>
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-right">
-          {/* تصفية حسب العيادة/الطبيب */}
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase">تصفية حسب الطبيب</label>
-            <select
-              value={filterDoctorId}
-              onChange={(e) => setFilterDoctorId(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-705"
-            >
-              <option value="">جميع الأطباء / العيادات</option>
-              {doctors.map(d => (
-                <option key={d.id} value={d.id}>د. {d.name} ({d.specialty})</option>
-              ))}
-            </select>
-          </div>
-
-          {/* تصفية حسب التخصص */}
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase">تصفية حسب التخصص الطبي</label>
-            <select
-              value={filterSpecialty}
-              onChange={(e) => setFilterSpecialty(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-705"
-            >
-              <option value="">جميع التخصصات</option>
-              {specialties.map(spec => (
-                <option key={spec} value={spec}>{spec}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* تصفية حسب اليوم */}
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase">تصفية حسب يوم محدد</label>
-            <input
-              type="date"
-              value={filterDate}
-              onChange={(e) => {
-                setFilterDate(e.target.value);
-                if (e.target.value) {
-                  setCurrentDate(dayjs(e.target.value));
-                }
-              }}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-705"
-            />
-          </div>
-
-          {/* تصفير الفلاتر */}
-          <div className="flex items-end">
-            {(filterDoctorId || filterSpecialty || filterDate) ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setFilterDoctorId('');
-                  setFilterSpecialty('');
-                  setFilterDate('');
-                }}
-                className="w-full px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-black rounded-lg transition-all flex items-center justify-center gap-1"
-              >
-                <span>✕ إعادة تعيين التصفية</span>
-              </button>
-            ) : (
-              <div className="text-[9px] text-slate-400 font-bold py-2">يعرض جميع المواعيد الفعالة</div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* قسم حالة تشغل العيادات لليوم المختار */}
-      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      {/* 📊 Daily Diagnostics & Hourly Load */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* 1. Daily Clinics Operational Status */}
+        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4 text-right border-slate-200">
           <div>
-            <h3 className="text-sm font-black text-slate-850 flex items-center gap-2">
-              <span className="text-teal-600">🏥</span>
-              <span>حالة العيادات والتشغيل الفعلي ليوم {dayjs(inspectionDate).format('YYYY/MM/DD')}</span>
-              {inspectionDate === dayjs().format('YYYY-MM-DD') && (
-                <span className="bg-blue-650 text-white text-[9px] px-2 py-0.5 rounded-full font-black animate-pulse">اليوم</span>
-              )}
+            <h3 className="text-xs font-black text-slate-855 flex items-center gap-1.5 justify-end">
+              <span>🩺 حالة التشغيل وتغطية عيادات الأطباء لهذا اليوم</span>
             </h3>
-            <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">عرض العيادات المكتملة وغير المكتملة لليوم المحدد ونسب التغطية</p>
+            <p className="text-[10px] text-slate-400 font-bold mt-1">جدول التغطية الفورية للعيادات لليوم: {inspectionDate}</p>
           </div>
-          <div className="text-xs font-bold text-slate-500">
-            حالة الإنجاز: <span className="font-mono text-emerald-600 font-extrabold">{dailyClinicsStatus.filter(c => c.total > 0 && c.isCompleted).length}</span> مكتملة من مصل <span className="font-mono text-blue-600 font-extrabold">{dailyClinicsStatus.filter(c => c.total > 0).length}</span> عيادة نشطة
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {dailyClinicsStatus.map(clinic => {
-            const hasAppointments = clinic.total > 0;
-            return (
-              <div 
-                key={clinic.doctor.id} 
-                className={`p-4 rounded-xl border bg-white transition-all shadow-sm flex flex-col justify-between ${
-                  !hasAppointments ? 'border-slate-150 opacity-60' : clinic.isCompleted ? 'border-emerald-200 shadow-emerald-950/5' : 'border-amber-200 shadow-amber-950/5'
-                }`}
-              >
-                <div>
-                  <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2 mb-3">
-                    <span className={`text-[9px] px-2 py-0.5 rounded-full font-black border uppercase tracking-wider ${clinic.statusColor}`}>
-                      {clinic.statusLabel}
-                    </span>
-                    {hasAppointments && (
-                      <span className="text-[9px] font-black font-mono text-slate-400">
-                        {clinic.completed + clinic.cancelled}/{clinic.total}
+          <div className="overflow-x-auto border border-slate-150 rounded-xl">
+            <table className="w-full text-right border-collapse" dir="rtl">
+              <thead>
+                <tr className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-150">
+                  <th className="px-4 py-3 text-right">الطبيب / العيادة</th>
+                  <th className="px-4 py-3 text-center">إجمالي المواعيد</th>
+                  <th className="px-4 py-3 text-center text-emerald-600 font-bold">المكتمل</th>
+                  <th className="px-4 py-3 text-center text-red-500 font-bold">الملغي</th>
+                  <th className="px-4 py-3 text-center text-amber-600 font-bold">قيد الانتظار</th>
+                  <th className="px-4 py-3 text-right font-bold text-slate-500">حالة التشغيل والتغطية</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-105 text-xs font-bold text-slate-700">
+                {dailyClinicsStatus.map((item: any, idx: number) => (
+                  <tr key={idx} className="hover:bg-slate-50/55 transition-colors">
+                    <td className="px-4 py-3 font-extrabold text-blue-900 text-right">د. {item.doctor.name} ({item.doctor.specialty})</td>
+                    <td className="px-4 py-3 text-center font-sans font-black">{item.total}</td>
+                    <td className="px-4 py-3 text-center font-sans text-emerald-600">{item.completed}</td>
+                    <td className="px-4 py-3 text-center font-sans text-red-500">{item.cancelled}</td>
+                    <td className="px-4 py-3 text-center font-sans text-amber-600">{item.pending}</td>
+                    <td className="px-4 py-3 text-right">
+                      <span className={`px-2 py-0.5 rounded text-[9px] border ${item.statusColor}`}>
+                        {item.statusLabel}
                       </span>
-                    )}
-                  </div>
-                  <h4 className="font-extrabold text-xs text-slate-800">د. {clinic.doctor.name}</h4>
-                  <p className="text-[10px] text-blue-600 font-extrabold mt-0.5">{clinic.doctor.specialty}</p>
-
-                  {hasAppointments && (
-                    <div className="mt-3 space-y-1.5 text-[10px] text-slate-500 font-bold text-right">
-                      <div className="flex justify-between">
-                        <span>مكتمل ومؤكد:</span>
-                        <span className="text-emerald-600 font-black">{clinic.completed}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>مستحق للانتظار:</span>
-                        <span className="text-amber-600 font-black">{clinic.pending}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>ملغى أو مؤجل:</span>
-                        <span className="text-red-500 font-black">{clinic.cancelled}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {hasAppointments && (
-                  <div className="mt-3 pt-3 border-t border-slate-100">
-                    <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                      <div 
-                        className={`h-full rounded-full transition-all duration-500 ${clinic.isCompleted ? 'bg-emerald-500' : 'bg-amber-500'}`}
-                        style={{ width: `${(clinic.completed / clinic.total) * 100}%` }}
-                      ></div>
-                    </div>
-                  </div>
+                    </td>
+                  </tr>
+                ))}
+                {dailyClinicsStatus.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-slate-400 italic">لا توجد مواعيد مجدولة لهذا اليوم</td>
+                  </tr>
                 )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 📊 Hour-by-Hour Appointments Distribution (Peak Times Chart) */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-black text-slate-850 flex items-center gap-2">
-              <span className="text-blue-650">📊</span>
-              <span>توزيع وكثافة المواعيد على مدار اليوم (فترات الذروة لموظفي الاستقبال)</span>
-            </h3>
-            <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">
-              {filterDate 
-                ? `يبين فترات الازدحام وكثافة الحجوزات بالساعة ليوم الكشف: ${dayjs(filterDate).format('YYYY/MM/DD')}`
-                : 'يبين فترات الذروة وساعات العمل الأكثر إشغالاً للمواعيد المفلترة حالياً'}
-            </p>
-          </div>
-          <div className="flex items-center gap-1.5 bg-blue-50 text-blue-700 px-3 py-1.5 rounded-xl border border-blue-100 text-[10px] font-black">
-            <span>💡 نصيحة لموظف الاستقبال:</span>
-            <span>تجنب جدولة المواعيد الجديدة في الساعات ذات الارتفاعات العالية لتقليل زمن انتظار المرضى.</span>
+              </tbody>
+            </table>
           </div>
         </div>
 
-        <div className="h-64 w-full pr-4">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={hourlyData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-              <defs>
-                <linearGradient id="colorHourApps" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#2563eb" stopOpacity={0.25}/>
-                  <stop offset="95%" stopColor="#2563eb" stopOpacity={0}/>
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis 
-                dataKey="hourString" 
-                tick={{ fontSize: 9, fontWeight: 800, fill: '#64748b' }} 
-                axisLine={false} 
-                tickLine={false} 
-              />
-              <YAxis 
-                allowDecimals={false}
-                tick={{ fontSize: 9, fontWeight: 800, fill: '#64748b' }} 
-                axisLine={false} 
-                tickLine={false} 
-              />
-              <Tooltip 
-                contentStyle={{ 
-                  direction: 'rtl',
-                  textAlign: 'right',
-                  backgroundColor: '#0f172a',
-                  color: '#fff',
-                  borderRadius: '12px',
-                  border: 'none',
-                  fontSize: '11px',
-                  fontWeight: 'bold',
-                  boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)'
-                }}
-                labelStyle={{ color: '#94a3b8', fontWeight: 'bold', fontSize: '9px', marginBottom: '4px' }}
-                itemStyle={{ color: '#60a5fa' }}
-              />
-              <Area 
-                type="monotone" 
-                dataKey="عدد المواعيد" 
-                stroke="#1d4ed8" 
-                strokeWidth={3} 
-                fillOpacity={1} 
-                fill="url(#colorHourApps)" 
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+        {/* 2. Hourly Appointment Density */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-3 border-slate-200">
+          <div className="text-right">
+            <h3 className="text-xs font-black text-slate-705">📈 كثافة المواعيد خلال ساعات اليوم</h3>
+            <p className="text-[10px] text-slate-400 font-bold mt-0.5">منحني بياني يوضح ساعات ذروة تدفق وكشوفات المرضى اليومية</p>
+          </div>
+          <div className="h-60 w-full pt-2">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={hourlyData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorHourApps" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#2563eb" stopOpacity={0.25}/>
+                    <stop offset="95%" stopColor="#2563eb" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis 
+                  dataKey="hourString" 
+                  tick={{ fontSize: 9, fontWeight: 800, fill: '#64748b' }} 
+                  axisLine={false} 
+                  tickLine={false}  
+                />
+                <YAxis 
+                  allowDecimals={false}
+                  tick={{ fontSize: 9, fontWeight: 800, fill: '#64748b' }} 
+                  axisLine={false} 
+                  tickLine={false} 
+                />
+                <Tooltip 
+                  contentStyle={{ 
+                    direction: 'rtl',
+                    textAlign: 'right',
+                    backgroundColor: '#0f172a',
+                    color: '#fff',
+                    borderRadius: '12px',
+                    border: 'none',
+                    fontSize: '11px',
+                    fontWeight: 'bold',
+                    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)'
+                  }}
+                  labelStyle={{ color: '#94a3b8', fontWeight: 'bold', fontSize: '9px', marginBottom: '4px' }}
+                  itemStyle={{ color: '#60a5fa' }}
+                />
+                <Area 
+                  type="monotone" 
+                  dataKey="عدد المواعيد" 
+                  stroke="#1d4ed8" 
+                  strokeWidth={3} 
+                  fillOpacity={1} 
+                  fill="url(#colorHourApps)" 
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </div>
 
@@ -11215,10 +10004,7 @@ function AppointmentsView({ appointments, doctors, patients, onRefresh, onSelect
             onClose={() => setShowExcelImportModal(false)}
             doctors={doctors}
             patients={patients}
-            onComplete={() => {
-              onRefresh();
-              setShowExcelImportModal(false);
-            }}
+            onComplete={onRefresh}
           />
         )}
       </AnimatePresence>
@@ -11226,34 +10012,26 @@ function AppointmentsView({ appointments, doctors, patients, onRefresh, onSelect
   );
 }
 
-function DailyReportPrintModal({ onClose, date, appointments, doctors, patients }: { onClose: () => void, date: string, appointments: any[], doctors: any[], patients: any[] }) {
-  // تصفية مواعيد اليوم المحدد
+function DailyReportPrintModal({ onClose, date, appointments, doctors, patients }: { onClose: () => void, date: string, appointments: Appointment[], doctors: Doctor[], patients: Patient[] }) {
+  const todayStr = dayjs(date).format("YYYY-MM-DD");
+  
   const todayAppointments = useMemo(() => {
-    return appointments.filter(a => dayjs(a.date).format('YYYY-MM-DD') === date);
-  }, [appointments, date]);
+    return appointments.filter(app => dayjs(app.date).format("YYYY-MM-DD") === todayStr);
+  }, [appointments, todayStr]);
 
-  // تصفية وحساب حالة العيادات اليوم
   const clinicsStatus = useMemo(() => {
     return doctors.map(doc => {
-      const docApps = todayAppointments.filter(a => a.doctorId === doc.id);
-      const total = docApps.length;
-      const completed = docApps.filter(a => a.status === 'completed').length;
-      const cancelled = docApps.filter(a => a.status === 'cancelled').length;
-      const pending = docApps.filter(a => a.status === 'scheduled').length;
+      const docAppts = todayAppointments.filter(app => app.doctorId === doc.id);
+      const completed = docAppts.filter(app => app.status === 'completed').length;
+      const cancelled = docAppts.filter(app => app.status === 'cancelled').length;
+      const total = docAppts.length;
+      const isCompleted = total > 0 && (completed + cancelled === total);
       
-      let statusLabel = 'غير نشطة (0 حجز)';
-      let isCompleted = false;
-      let statusColor = 'bg-slate-100 text-slate-400 border-slate-200';
-
+      let statusLabel = "شاغر / لم يبدأ";
       if (total > 0) {
-        if (pending === 0) {
-          statusLabel = 'مكتملة 100%';
-          isCompleted = true;
-          statusColor = 'bg-emerald-55 text-emerald-700 border-emerald-200';
-        } else {
-          statusLabel = `نشطة (متبقي ${pending})`;
-          statusColor = 'bg-amber-55 text-amber-700 border-amber-200';
-        }
+        if (completed === total) statusLabel = "مكتمل بالكامل";
+        else if (isCompleted) statusLabel = "منتهي";
+        else statusLabel = "قيد التشغيل والعمل";
       }
 
       return {
@@ -11261,176 +10039,72 @@ function DailyReportPrintModal({ onClose, date, appointments, doctors, patients 
         total,
         completed,
         cancelled,
-        pending,
-        statusLabel,
         isCompleted,
-        statusColor
+        statusLabel
       };
     });
-  }, [todayAppointments, doctors]);
-
-  const handlePrint = () => {
-    window.print();
-  };
+  }, [doctors, todayAppointments]);
 
   return (
-    <div 
-      className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-[3px] overflow-y-auto"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <style dangerouslySetInnerHTML={{__html: `
-        @media print {
-          body * {
-            visibility: hidden;
-            background: none !important;
-          }
-          #report-print-area, #report-print-area * {
-            visibility: visible;
-          }
-          #report-print-area {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: auto;
-            background: white !important;
-            color: black !important;
-            direction: rtl;
-            padding: 30px !important;
-            box-shadow: none !important;
-            border: none !important;
-          }
-          .no-print {
-            display: none !important;
-          }
-        }
-      `}} />
-
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.97 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.97 }}
-        className="bg-slate-900 border border-slate-800 text-white w-full max-w-5xl rounded-3xl overflow-hidden shadow-2xl flex flex-col lg:flex-row h-[85vh] no-print"
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px] z-[120] flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.98, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, y: 10 }}
+        className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden border border-slate-205 flex flex-col h-[90vh]"
       >
-        {/* Left column: Setup summary info (controls) */}
-        <div className="w-full lg:w-1/3 p-6 overflow-y-auto border-r border-slate-800 space-y-6 text-right order-2 lg:order-1 bg-slate-950 text-slate-300">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-            <h2 className="text-base font-black text-white flex items-center gap-2">
-              <FileText size={18} className="text-emerald-500" />
-              تصدير وطباعة ملخص اليوم
-            </h2>
-            <button onClick={onClose} className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors">
-              <X size={20} />
-            </button>
-          </div>
-
-          <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800/80 space-y-3 text-xs">
-            <p className="font-bold text-teal-400 text-md">التاريخ المختار: {dayjs(date).format('YYYY/MM/DD')}</p>
-            <hr className="border-slate-800" />
-            <div className="space-y-1">
-              <p>إجمالي كشوفات اليوم: <span className="font-black text-white">{todayAppointments.length} كشف</span></p>
-              <p>المكتملة بنجاح: <span className="font-bold text-emerald-400">{todayAppointments.filter(a => a.status === 'completed').length}</span></p>
-              <p>الانتظار أو المجدولة: <span className="font-bold text-amber-400">{todayAppointments.filter(a => a.status === 'scheduled').length}</span></p>
-              <p>الملغاة: <span className="font-bold text-red-400">{todayAppointments.filter(a => a.status === 'cancelled').length}</span></p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <h3 className="text-xs font-black text-white px-1">العيادات اليومية وتغطيتها:</h3>
-            <div className="space-y-1.5 max-h-[220px] overflow-y-auto pr-1">
-              {clinicsStatus.filter(c => c.total > 0).map((c, idx) => (
-                <div key={idx} className="bg-slate-900/60 p-2.5 rounded-lg border border-slate-850 text-xs flex justify-between items-center">
-                  <span className={`text-[9px] px-2 py-0.5 rounded-md font-black ${c.isCompleted ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
-                    {c.statusLabel}
-                  </span>
-                  <div className="text-right">
-                    <p className="font-black text-white">د. {c.doctor.name}</p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">الحجوزات: {c.total} (مكتمل: {c.completed})</p>
-                  </div>
-                </div>
-              ))}
-              {clinicsStatus.filter(c => c.total > 0).length === 0 && (
-                <p className="text-[11px] text-slate-500 italic text-center py-4">لا توجد عيادات مسجل بها حجوزات اليوم.</p>
-              )}
-            </div>
-          </div>
-
-          <div className="pt-4 border-t border-slate-800 flex flex-col gap-3">
-            <button 
-              type="button" 
-              onClick={handlePrint}
-              className="w-full py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition-all flex items-center justify-center gap-1.5 text-xs shadow-lg shadow-emerald-950/20"
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+          <h2 className="text-sm font-black text-slate-800 flex items-center gap-2">
+            <span>📋 ملخص التقرير اليومي التشغيلي</span>
+            <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{todayStr}</span>
+          </h2>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.print()}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer"
             >
-              تحميل وحفظ ملخص اليوم PDF 🖨️
+              طباعة التقرير 🖨️
             </button>
-            <button 
-              type="button" 
-              onClick={onClose} 
-              className="py-3 bg-slate-800 text-slate-300 font-bold rounded-xl hover:bg-slate-700 text-xs text-center transition-all"
+            <button
+              onClick={onClose}
+              className="p-1.5 hover:bg-slate-200 text-slate-400 hover:text-slate-600 rounded-lg transition-colors cursor-pointer"
             >
-              إلغاء
+              <X size={16} />
             </button>
           </div>
         </div>
 
-        {/* Right column: Real-time paper template render (visual design) */}
-        <div className="w-full lg:w-2/3 p-8 bg-slate-800 overflow-y-auto flex items-center justify-center order-1 lg:order-2">
-          {/* Printable visual frame representing standard A4 report */}
-          <div 
-            id="report-print-area" 
-            className="w-full max-w-[650px] aspect-[1/1.414] bg-white text-slate-900 rounded-lg shadow-2xl p-8 flex flex-col justify-between text-right font-sans relative border-t-8 border-emerald-600"
-            style={{ direction: 'rtl' }}
-          >
-            {/* Header */}
-            <div>
-              <div className="flex justify-between items-start border-b-2 border-slate-200 pb-4">
-                <div className="text-right">
-                  <h1 className="text-base font-black text-slate-900">مجمع عيادات الشفاء الطبي</h1>
-                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">Al-Shifa Medical Complex</p>
-                  <p className="text-[9px] text-slate-400">هيكل المواعيد والتشغيل الفعلي لجميع التخصصات</p>
-                </div>
-                <div className="text-left font-mono">
-                  <h2 className="text-sm font-black text-slate-800">تقرير ملخص المواعيد اليومي</h2>
-                  <p className="text-[9px] text-blue-600 font-black tracking-wide">العيادات والتشغيل اليومي</p>
-                  <p className="text-[9px] text-slate-450">التاريخ: {dayjs(date).format('YYYY/MM/DD')}</p>
+        <div className="flex-1 overflow-y-auto p-8 printing-container" dir="rtl">
+          <div className="max-w-3xl mx-auto space-y-6">
+            <div className="flex justify-between items-center border-b-2 border-slate-900 pb-4">
+              <div className="text-right">
+                <h1 className="text-xl font-black text-slate-900">مجمع الشفاء الطبي التخصصي</h1>
+                <p className="text-[10px] text-slate-500 font-bold">فرع العيادات التخصصية الشاملة</p>
+                <p className="text-[10px] text-slate-500 font-mono">تاريخ التقرير: {todayStr}</p>
+              </div>
+              <div className="text-left">
+                <div className="border border-slate-900 p-2 text-center rounded">
+                  <span className="text-xs font-black block">تقرير تشغيل يومي</span>
+                  <span className="text-[9px] text-slate-400 font-mono block">Daily Operational Status</span>
                 </div>
               </div>
+            </div>
 
-              {/* Stats overview banner */}
-              <div className="grid grid-cols-4 gap-4 text-center mt-6">
-                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                  <span className="text-[8px] text-slate-400 font-black block">إجمالي كشوفات اليوم</span>
-                  <span className="text-sm font-black text-slate-800">{todayAppointments.length}</span>
-                </div>
-                <div className="bg-emerald-50/55 p-2.5 rounded-lg border border-emerald-100">
-                  <span className="text-[8px] text-emerald-600 font-black block">الكشوفات المكتملة</span>
-                  <span className="text-sm font-black text-emerald-700">{todayAppointments.filter(a => a.status === 'completed').length}</span>
-                </div>
-                <div className="bg-amber-50/55 p-2.5 rounded-lg border border-amber-100">
-                  <span className="text-[8px] text-amber-600 font-black block">قيد الانتظار أو Scheduled</span>
-                  <span className="text-sm font-black text-amber-700">{todayAppointments.filter(a => a.status === 'scheduled').length}</span>
-                </div>
-                <div className="bg-rose-50/55 p-2.5 rounded-lg border border-rose-100">
-                  <span className="text-[8px] text-rose-600 font-black block">الكشوفات الملغاة</span>
-                  <span className="text-sm font-black text-rose-700">{todayAppointments.filter(a => a.status === 'cancelled').length}</span>
-                </div>
-              </div>
-
-              {/* Clinics Status summary table */}
-              <div className="mt-6 text-right">
-                <h3 className="text-[11px] font-black text-slate-800 mb-2.5 border-r-4 border-emerald-600 pr-2 pb-0.5">أولاً: مؤشرات تشغيل وتغطية عيادات الأطباء</h3>
+            <div className="text-right">
+              <h3 className="text-[11px] font-black text-slate-800 mb-2.5 border-r-4 border-emerald-600 pr-2 pb-0.5">أولاً: مؤشرات عيادات الأطباء ومعدل الفحص</h3>
+              <div className="border border-slate-150 rounded-xl overflow-hidden">
                 <table className="w-full text-right text-[10px] border-collapse">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 font-black border-b border-slate-100">
-                      <th className="py-2 px-3">اسم الطبيب</th>
+                      <th className="py-2 px-3">الطبيب المعالج</th>
                       <th className="py-2 px-3">التخصص</th>
-                      <th className="py-2 px-3">إجمالي الحجوزات</th>
-                      <th className="py-2 px-3">المكتملة</th>
-                      <th className="py-2 px-3">الملغاة</th>
-                      <th className="py-2 px-3 font-semibold">حالة التشغيل والتغطية</th>
+                      <th className="py-2 px-3">إجمالي الحالات</th>
+                      <th className="py-2 px-3 text-emerald-600">المكتمل</th>
+                      <th className="py-2 px-3 text-red-500">الملغي</th>
+                      <th className="py-2 px-3">حالة التشغيل والتغطية</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 font-bold text-slate-705">
+                  <tbody className="divide-y divide-slate-100 font-bold text-slate-700">
                     {clinicsStatus.map((c, idx) => (
                       <tr key={idx} className="hover:bg-slate-50/50">
                         <td className="py-2 px-3 font-black text-slate-900">د. {c.doctor.name}</td>
@@ -11439,7 +10113,7 @@ function DailyReportPrintModal({ onClose, date, appointments, doctors, patients 
                         <td className="py-2 px-3 text-emerald-600">{c.completed}</td>
                         <td className="py-2 px-3 text-red-500">{c.cancelled}</td>
                         <td className="py-2 px-3">
-                          <span className={`${c.total === 0 ? 'text-slate-400' : c.isCompleted ? 'text-emerald-600' : 'text-amber-600'}`}>
+                          <span className={c.total === 0 ? 'text-slate-400' : c.isCompleted ? 'text-emerald-00' : 'text-amber-600'}>
                             {c.statusLabel}
                           </span>
                         </td>
@@ -11448,10 +10122,12 @@ function DailyReportPrintModal({ onClose, date, appointments, doctors, patients 
                   </tbody>
                 </table>
               </div>
+            </div>
 
-              {/* Daily appointments Schedule list */}
-              <div className="mt-6 text-right">
-                <h3 className="text-[11px] font-black text-slate-800 mb-2.5 border-r-4 border-emerald-600 pr-2 pb-0.5">ثانياً: سجل وجدول كشوفات المرضى التفصيلي</h3>
+            {/* Daily appointments Schedule list */}
+            <div className="mt-6 text-right">
+              <h3 className="text-[11px] font-black text-slate-800 mb-2.5 border-r-4 border-emerald-600 pr-2 pb-0.5">ثانياً: سجل وجدول كشوفات المرضى التفصيلي</h3>
+              <div className="border border-slate-150 rounded-xl overflow-hidden">
                 <table className="w-full text-right text-[9px] border-collapse">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 font-black border-b border-slate-100">
@@ -11501,9 +10177,9 @@ function DailyReportPrintModal({ onClose, date, appointments, doctors, patients 
                 <div className="text-right text-[7.5px] text-slate-400 max-w-[400px] leading-relaxed">
                   📜 مستند ملخص تشغيلي مستخرج تلقائياً من نظام العيادات الشامل. مراجعة وتدقيق إدارة الاستقبال والبيانات المالية.
                 </div>
-                <div className="text-center w-[120px] border-t border-dashed border-slate-350 pt-1">
+                <div className="text-center w-[120px] border-t border-dashed border-slate-300 pt-1">
                   <span className="text-[7.5px] font-black text-slate-400 uppercase block tracking-wider">ختم وتوقيع المدير الطبي</span>
-                  <span className="text-[8px] font-extrabold text-slate-650 block mt-2">إدارة مجمع الشفاء</span>
+                  <span className="text-[8px] font-extrabold text-slate-600 block mt-2">إدارة مجمع الشفاء</span>
                 </div>
               </div>
             </div>

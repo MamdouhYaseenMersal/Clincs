@@ -801,8 +801,18 @@ ${fileListText}
     const db = await readDb();
     const index = db.patients.findIndex(p => p.id === req.params.id);
     if (index !== -1) {
+      const beforeState = JSON.parse(JSON.stringify(db.patients[index]));
       db.patients[index] = { ...db.patients[index], ...req.body };
-      await logAction(db, "UPDATE", req.params.id, "patient", `Updated patient data for: ${db.patients[index].name}`);
+      const afterState = JSON.parse(JSON.stringify(db.patients[index]));
+      await logAction(
+        db,
+        "UPDATE",
+        req.params.id,
+        "patient",
+        `Updated patient data for: ${db.patients[index].name}`,
+        undefined,
+        { beforeState, afterState }
+      );
       await writeDb(db);
       res.json(db.patients[index]);
     } else {
@@ -982,6 +992,7 @@ ${fileListText}
     const db = await readDb();
     const index = db.visits.findIndex(v => v.id === req.params.id);
     if (index !== -1) {
+      const beforeState = JSON.parse(JSON.stringify(db.visits[index]));
       const mergedVisit = { ...db.visits[index], ...req.body };
       const doctorId = mergedVisit.doctorId;
       const basePrice = Number(mergedVisit.basePrice || 0);
@@ -995,8 +1006,18 @@ ${fileListText}
         doctorEarnings,
         clinicEarnings
       };
+      
+      const afterState = JSON.parse(JSON.stringify(db.visits[index]));
 
-      await logAction(db, "UPDATE", req.params.id, "visit", `Updated details for visit: ${db.visits[index].id}`);
+      await logAction(
+        db,
+        "UPDATE",
+        req.params.id,
+        "visit",
+        `Updated details for visit: ${db.visits[index].id}`,
+        undefined,
+        { beforeState, afterState }
+      );
       await writeDb(db);
       res.json(db.visits[index]);
     } else {

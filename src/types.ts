@@ -31,6 +31,37 @@ export interface Doctor {
   };
 }
 
+export interface Referral {
+  id: string;
+  type: 'emergency' | 'medical_admin' | 'oncology'; // emergency = طوارئ, medical_admin = إدارة طبية, oncology = أورام
+  requestDescription: string;
+  status: 'pending' | 'approved' | 'rejected' | 'completed';
+  notes?: string;
+  createdAt: string;
+  updatedAt?: string;
+  approvedBy?: string;
+}
+
+export interface Investigation {
+  id: string;
+  name: string;
+  type: 'internal' | 'external';
+  departmentName?: string;
+  approvalRequired: boolean;
+  approvalStatus: 'approved' | 'pending' | 'rejected' | 'not_required';
+  approvedBy?: string;
+  results?: string;
+  vitalsOnExam?: {
+    temperature?: string;
+    bloodPressure?: string;
+    pulse?: string;
+    weight?: string;
+    height?: string;
+  };
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface Patient {
   id: string;
   name: string;
@@ -45,6 +76,32 @@ export interface Patient {
   passportNumber?: string;
   createdAt: string;
   branch?: string;
+  referrals?: Referral[];
+  investigations?: Investigation[];
+  allergies?: string;
+  surgicalHistory?: string;
+  familyHistory?: string;
+  chronicConditions?: string;
+  longTermTreatmentPlans?: LongTermTreatmentPlan[];
+}
+
+export interface ChronicMedication {
+  id: string;
+  name: string;
+  dosage: string;
+  frequency: string;
+  startedAt: string;
+}
+
+export interface LongTermTreatmentPlan {
+  id: string;
+  planName: string;
+  medications: ChronicMedication[];
+  frequencyMonths: number; // e.g. 1, 3, 6, 12 months frequency
+  lastReviewDate: string; // YYYY-MM-DD
+  nextReviewDate: string; // YYYY-MM-DD
+  notes?: string;
+  status: 'active' | 'completed' | 'suspended';
 }
 
 export interface Appointment {
@@ -156,6 +213,11 @@ export interface AuditLog {
   details: string;
   timestamp: string;
   branch?: string;
+  payload?: {
+    beforeState?: any;
+    afterState?: any;
+    [key: string]: any;
+  };
 }
 
 export interface Message {

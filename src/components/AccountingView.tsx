@@ -4,7 +4,7 @@ import dayjs from 'dayjs';
 import { 
   X, BarChart as BarChartIcon, LineChart as LineChartIcon, PieChart as PieChartIcon, 
   TrendingUp, TrendingDown, Coins, AlertCircle, FileText, ChevronRight, 
-  Download, Activity, Calendar, Award 
+  Download, Activity, Calendar, Award, BookOpen
 } from 'lucide-react';
 import { 
   ResponsiveContainer, BarChart, Bar, AreaChart, Area, XAxis, YAxis, 
@@ -20,6 +20,7 @@ interface AccountingViewProps {
   allPatients?: any[];
   allAppointments?: any[];
   allDoctors?: any[];
+  onOpenHelp?: (stepId: any) => void;
 }
 
 export default function AccountingView({ 
@@ -28,7 +29,8 @@ export default function AccountingView({
   allVisits = [], 
   allPatients = [], 
   allAppointments = [], 
-  allDoctors = [] 
+  allDoctors = [],
+  onOpenHelp
 }: AccountingViewProps) {
   // Local date range for filtering reports
   const [dateRange, setDateRange] = useState({ 
@@ -292,6 +294,14 @@ export default function AccountingView({
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">إدارة الأرباح وتوزيع مستحقات الأطباء</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          {onOpenHelp && (
+            <button
+              onClick={() => onOpenHelp('finance')}
+              className="px-4 py-2.5 bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
+            >
+              <BookOpen size={14} className="text-blue-600" /> عرض شرح هذه القائمة
+            </button>
+          )}
           <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
             <input 
               type="date" 
@@ -309,7 +319,7 @@ export default function AccountingView({
           </div>
           <button 
             onClick={exportFinancialReport}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1 cursor-pointer"
+            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1 cursor-pointer"
           >
             <Download size={14} /> تصدير التقرير المالي الموحد
           </button>

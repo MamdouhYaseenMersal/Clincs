@@ -44,7 +44,8 @@ import {
   Printer,
   Heart,
   ShieldCheck,
-  AlertCircle
+  AlertCircle,
+  BookOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -75,6 +76,7 @@ import { TreatmentPlanView } from './components/TreatmentPlanView';
 import UploadModal from './components/UploadModal';
 import AccountingView from './components/AccountingView';
 import InventoryView from './components/InventoryView';
+import TrainingCatalogModal from './components/TrainingCatalogModal';
 
 dayjs.extend(relativeTime);
 dayjs.locale('ar');
@@ -93,6 +95,8 @@ export default function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [showUserSettings, setShowUserSettings] = useState(false);
+  const [showTrainingCatalog, setShowTrainingCatalog] = useState(false);
+  const [trainingCatalogStep, setTrainingCatalogStep] = useState<any>(undefined);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [autoCompleteAppointmentId, setAutoCompleteAppointmentId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -620,6 +624,14 @@ export default function App() {
         </div>
           <div className="flex items-center gap-4">
              <button 
+              type="button"
+              onClick={() => setShowTrainingCatalog(true)}
+              className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-black shadow-sm transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer"
+             >
+              📖 دليل التدريب والكتالوج
+             </button>
+
+             <button 
               onClick={() => setActiveView('patients')}
               className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-blue-700 transition-all active:scale-95"
             >
@@ -748,8 +760,28 @@ export default function App() {
                 currentUser={currentUser}
               />
             )}
-            {activeView === 'patients' && <PatientsView key="pts" patients={filteredPatients} doctors={filteredDoctors} onRefresh={loadData} onSelectPatient={navigateToProfile} selectedBranch={selectedBranch} />}
-            {activeView === 'doctors' && <DoctorsView key="docs" doctors={filteredDoctors} visits={filteredVisits} patients={filteredPatients} onRefresh={loadData} selectedBranch={selectedBranch} />}
+            {activeView === 'patients' && (
+              <PatientsView 
+                key="pts" 
+                patients={filteredPatients} 
+                doctors={filteredDoctors} 
+                onRefresh={loadData} 
+                onSelectPatient={navigateToProfile} 
+                selectedBranch={selectedBranch} 
+                onOpenHelp={(step: any) => { setTrainingCatalogStep(step); setShowTrainingCatalog(true); }}
+              />
+            )}
+            {activeView === 'doctors' && (
+              <DoctorsView 
+                key="docs" 
+                doctors={filteredDoctors} 
+                visits={filteredVisits} 
+                patients={filteredPatients} 
+                onRefresh={loadData} 
+                selectedBranch={selectedBranch} 
+                onOpenHelp={(step: any) => { setTrainingCatalogStep(step); setShowTrainingCatalog(true); }}
+              />
+            )}
             {activeView === 'appointments' && (
               <AppointmentsView 
                 key="appts" 
@@ -776,6 +808,7 @@ export default function App() {
                 allPatients={patients}
                 allAppointments={appointments}
                 allDoctors={doctors}
+                onOpenHelp={(step: any) => { setTrainingCatalogStep(step); setShowTrainingCatalog(true); }}
               />
             )}
             {activeView === 'inventory' && <InventoryView key="inv" inventory={filteredInventory} onRefresh={loadData} selectedBranch={selectedBranch} />}
@@ -874,6 +907,12 @@ export default function App() {
               await api.createUser(updatedUser);
               loadData();
             }}
+          />
+        )}
+        {showTrainingCatalog && (
+          <TrainingCatalogModal 
+            onClose={() => setShowTrainingCatalog(false)}
+            initialStep={trainingCatalogStep}
           />
         )}
       </AnimatePresence>
@@ -1659,7 +1698,7 @@ function StatsCard({ label, value, trend, trendColor = 'text-slate-400' }: any) 
 }
 
 // --- Patients View ---
-function PatientsView({ patients, doctors = [], onRefresh, onSelectPatient, selectedBranch }: any) {
+function PatientsView({ patients, doctors = [], onRefresh, onSelectPatient, selectedBranch, onOpenHelp }: any) {
   const [isAdding, setIsAdding] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [search, setSearch] = useState("");
@@ -1706,6 +1745,16 @@ function PatientsView({ patients, doctors = [], onRefresh, onSelectPatient, sele
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">إدارة وتتبع سجلات الحالات المتكاملة وتكامل البيانات</p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {onOpenHelp && (
+            <button
+              type="button"
+              onClick={() => onOpenHelp('patients')}
+              className="bg-blue-50 border border-blue-200 hover:bg-blue-105 text-blue-700 px-4 py-2 rounded-xl font-bold flex items-center gap-1.5 transition-all text-xs cursor-pointer active:scale-95 animate-fade-in"
+            >
+              <BookOpen size={14} className="text-blue-600" />
+              <span>عرض شرح هذه القائمة</span>
+            </button>
+          )}
           <button 
             type="button"
             onClick={exportPatientsJSON}
@@ -2717,7 +2766,7 @@ function PatientModal({ onClose, onSubmit, initialData }: any) {
 }
 
 // --- Doctors View ---
-function DoctorsView({ doctors, visits, patients = [], onRefresh, selectedBranch }: any) {
+function DoctorsView({ doctors, visits, patients = [], onRefresh, selectedBranch, onOpenHelp }: any) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingDoctor, setEditingDoctor] = useState<any>(null);
   const [search, setSearch] = useState("");
@@ -2943,6 +2992,16 @@ function DoctorsView({ doctors, visits, patients = [], onRefresh, selectedBranch
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">إدارة الدكاترة ونظام المحاسبة المتقدم</p>
         </div>
         <div className="flex flex-wrap gap-2.5 items-center justify-end">
+          {onOpenHelp && (
+            <button
+              type="button"
+              onClick={() => onOpenHelp('doctors')}
+              className="bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-1.5 transition-all text-xs cursor-pointer active:scale-95 shadow-sm"
+            >
+              <BookOpen size={14} className="text-blue-600" />
+              <span>عرض شرح هذه القائمة</span>
+            </button>
+          )}
           {/* Download Team template button */}
           <button 
             type="button"

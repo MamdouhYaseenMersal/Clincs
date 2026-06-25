@@ -18,7 +18,8 @@ import {
   MessageSquare,
   ShieldAlert,
   HelpCircle,
-  Sparkles
+  Sparkles,
+  BookOpen
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -44,6 +45,7 @@ interface QueuingViewProps {
   appointments: Appointment[];
   onRefresh: () => void;
   selectedBranch: string;
+  onOpenHelp?: (step: any) => void;
 }
 
 export default function QueuingView({ 
@@ -51,7 +53,8 @@ export default function QueuingView({
   patients, 
   appointments, 
   onRefresh, 
-  selectedBranch 
+  selectedBranch,
+  onOpenHelp
 }: QueuingViewProps) {
   const [activeTab, setActiveTab] = useState<'caller' | 'tv' | 'reports' | 'followup'>('caller');
   const [callerSubMode, setCallerSubMode] = useState<'doctor-station' | 'reception'>('doctor-station');
@@ -335,42 +338,52 @@ export default function QueuingView({
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">تنسيق دخول المرضى وإخطارهم صوتياً وإلكترونياً والتحليل الذكي لـ SLA</p>
         </div>
         
-        {/* Navigation tabs */}
-        <div className="flex bg-slate-100 p-1 rounded-xl gap-1 overflow-x-auto">
-          <button 
-            onClick={() => setActiveTab('followup')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 shrink-0 ${activeTab === 'followup' ? 'bg-white text-emerald-600 shadow-sm border border-emerald-100' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-            <ShieldAlert size={14} className={activeTab === 'followup' ? 'text-emerald-500' : ''} />
-            <span>إدارة المتابعة الطبية</span>
-            {delayedAppointments.length > 0 && (
-              <span className="bg-red-500 text-white rounded-full size-4 flex items-center justify-center text-[9px] font-bold font-mono animate-pulse">{delayedAppointments.length}</span>
-            )}
-          </button>
+        {/* Navigation tabs with help button wrapper */}
+        <div className="flex flex-wrap items-center gap-3">
+          {onOpenHelp && (
+            <button
+              onClick={() => onOpenHelp('queue')}
+              className="px-4 py-2.5 bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
+            >
+              <BookOpen size={14} className="text-blue-600" /> عرض شرح هذه القائمة
+            </button>
+          )}
+          <div className="flex bg-slate-100 p-1 rounded-xl gap-1 overflow-x-auto">
+            <button 
+              onClick={() => setActiveTab('followup')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 shrink-0 ${activeTab === 'followup' ? 'bg-white text-emerald-600 shadow-sm border border-emerald-100' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <ShieldAlert size={14} className={activeTab === 'followup' ? 'text-emerald-500' : ''} />
+              <span>إدارة المتابعة الطبية</span>
+              {delayedAppointments.length > 0 && (
+                <span className="bg-red-500 text-white rounded-full size-4 flex items-center justify-center text-[9px] font-bold font-mono animate-pulse">{delayedAppointments.length}</span>
+              )}
+            </button>
 
-          <button 
-            onClick={() => setActiveTab('reports')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 shrink-0 ${activeTab === 'reports' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-            <TrendingUp size={14} />
-            <span>تقارير الـ SLA والأداء</span>
-          </button>
-          
-          <button 
-            onClick={() => setActiveTab('tv')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 shrink-0 ${activeTab === 'tv' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-            <Tv size={14} />
-            <span>شاشة قاعة الانتظار (TV Area)</span>
-          </button>
+            <button 
+              onClick={() => setActiveTab('reports')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 shrink-0 ${activeTab === 'reports' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <TrendingUp size={14} />
+              <span>تقارير الـ SLA والأداء</span>
+            </button>
+            
+            <button 
+              onClick={() => setActiveTab('tv')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 shrink-0 ${activeTab === 'tv' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <Tv size={14} />
+              <span>شاشة قاعة الانتظار (TV Area)</span>
+            </button>
 
-          <button 
-            onClick={() => setActiveTab('caller')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 shrink-0 ${activeTab === 'caller' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-            <Volume2 size={14} />
-            <span>محطة نداء الطبيب</span>
-          </button>
+            <button 
+              onClick={() => setActiveTab('caller')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 shrink-0 ${activeTab === 'caller' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <Volume2 size={14} />
+              <span>محطة نداء الطبيب</span>
+            </button>
+          </div>
         </div>
       </header>
 

@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import dayjs from 'dayjs';
 import { 
-  Plus, Search, Trash2, Edit, Check, AlertCircle, Filter, Calendar, X, Loader2 
+  Plus, Search, Trash2, Edit, Check, AlertCircle, Filter, Calendar, X, Loader2, BookOpen 
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { InventoryItem } from '../types';
@@ -12,9 +12,10 @@ interface InventoryViewProps {
   inventory: InventoryItem[];
   onRefresh: () => void;
   selectedBranch: string;
+  onOpenHelp?: (step: any) => void;
 }
 
-export default function InventoryView({ inventory, onRefresh, selectedBranch }: InventoryViewProps) {
+export default function InventoryView({ inventory, onRefresh, selectedBranch, onOpenHelp }: InventoryViewProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [search, setSearch] = useState("");
@@ -167,12 +168,23 @@ export default function InventoryView({ inventory, onRefresh, selectedBranch }: 
           <h1 className="text-2xl font-black text-slate-800 tracking-tight">مخازن الأدوية والمستلزمات الطبية</h1>
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">إدارة العهد والمعدات، ومراقبة الصلاحية والنواقص في فرع: {selectedBranch || "جميع الفروع"}</p>
         </div>
-        <button 
-          onClick={() => { resetForm(); setIsAdding(true); }}
-          className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1 self-start md:self-auto cursor-pointer"
-        >
-          <Plus size={14} /> إضافة صنف إمدادي جديد
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          {onOpenHelp && (
+            <button
+              type="button"
+              onClick={() => onOpenHelp('inventory')}
+              className="px-4 py-2.5 bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
+            >
+              <BookOpen size={14} className="text-blue-600" /> عرض شرح هذه القائمة
+            </button>
+          )}
+          <button 
+            onClick={() => { resetForm(); setIsAdding(true); }}
+            className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1 self-start md:self-auto cursor-pointer"
+          >
+            <Plus size={14} /> إضافة صنف إمدادي جديد
+          </button>
+        </div>
       </header>
 
       {/* KPI Metric Summary */}

@@ -22,7 +22,8 @@ import {
   Shield,
   CornerDownLeft,
   CheckCheck,
-  UserCheck
+  UserCheck,
+  BookOpen
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Patient, Doctor, Visit, Appointment, User, Message } from '../types';
@@ -36,6 +37,7 @@ interface MessagesViewProps {
   preselectedPatientId?: string;
   onClearPreselect?: () => void;
   currentUser?: User;
+  onOpenHelp?: (step: any) => void;
 }
 
 export default function MessagesView({ 
@@ -44,7 +46,8 @@ export default function MessagesView({
   onRefreshAllData, 
   preselectedPatientId,
   onClearPreselect,
-  currentUser
+  currentUser,
+  onOpenHelp
 }: MessagesViewProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
@@ -321,8 +324,19 @@ export default function MessagesView({
           </p>
         </div>
         
-        {/* Real-time status */}
-        <div className="flex items-center gap-3 bg-white/10 px-4 py-2 rounded-xl backdrop-blur-sm border border-white/10">
+        <div className="flex flex-wrap items-center gap-3">
+          {onOpenHelp && (
+            <button
+              type="button"
+              onClick={() => onOpenHelp('messages')}
+              className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm border border-white/10 backdrop-blur-sm"
+            >
+              <BookOpen size={14} className="text-indigo-200" /> عرض شرح هذه القائمة
+            </button>
+          )}
+
+          {/* Real-time status */}
+          <div className="flex items-center gap-3 bg-white/10 px-4 py-2 rounded-xl backdrop-blur-sm border border-white/10">
           <button 
             type="button" 
             onClick={() => loadMessagesAndUsers(true)}
@@ -352,6 +366,7 @@ export default function MessagesView({
               <option value="0" className="text-slate-900 font-bold">إيقاف التحديث التلقائي</option>
             </select>
           </div>
+        </div>
         </div>
       </div>
 

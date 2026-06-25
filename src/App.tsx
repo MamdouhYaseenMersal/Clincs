@@ -797,6 +797,7 @@ export default function App() {
                   }
                   navigateToProfile(pId);
                 }} 
+                onOpenHelp={(step: any) => { setTrainingCatalogStep(step); setShowTrainingCatalog(true); }}
               />
             )}
             {activeView === 'accounting' && (
@@ -811,7 +812,15 @@ export default function App() {
                 onOpenHelp={(step: any) => { setTrainingCatalogStep(step); setShowTrainingCatalog(true); }}
               />
             )}
-            {activeView === 'inventory' && <InventoryView key="inv" inventory={filteredInventory} onRefresh={loadData} selectedBranch={selectedBranch} />}
+            {activeView === 'inventory' && (
+              <InventoryView 
+                key="inv" 
+                inventory={filteredInventory} 
+                onRefresh={loadData} 
+                selectedBranch={selectedBranch} 
+                onOpenHelp={(step: any) => { setTrainingCatalogStep(step); setShowTrainingCatalog(true); }}
+              />
+            )}
             {activeView === 'queuing' && (
               <QueuingView 
                 key="queuing"
@@ -820,6 +829,7 @@ export default function App() {
                 appointments={appointments}
                 onRefresh={loadData}
                 selectedBranch={selectedBranch}
+                onOpenHelp={(step: any) => { setTrainingCatalogStep(step); setShowTrainingCatalog(true); }}
               />
             )}
             {activeView === 'messages' && (
@@ -831,10 +841,27 @@ export default function App() {
                 preselectedPatientId={messagesPreselectPatientId}
                 onClearPreselect={() => setMessagesPreselectPatientId('')}
                 currentUser={currentUser}
+                onOpenHelp={(step: any) => { setTrainingCatalogStep(step); setShowTrainingCatalog(true); }}
               />
             )}
-            {activeView === 'audit-logs' && <AuditLogsView key="audit" logs={filteredAuditLogs} onRefresh={loadData} users={users} />}
-            {activeView === 'rooms' && <RoomsView key="rooms" patients={filteredPatients} doctors={filteredDoctors} selectedBranch={selectedBranch} />}
+            {activeView === 'audit-logs' && (
+              <AuditLogsView 
+                key="audit" 
+                logs={filteredAuditLogs} 
+                onRefresh={loadData} 
+                users={users} 
+                onOpenHelp={(step: any) => { setTrainingCatalogStep(step); setShowTrainingCatalog(true); }}
+              />
+            )}
+            {activeView === 'rooms' && (
+              <RoomsView 
+                key="rooms" 
+                patients={filteredPatients} 
+                doctors={filteredDoctors} 
+                selectedBranch={selectedBranch} 
+                onOpenHelp={(step: any) => { setTrainingCatalogStep(step); setShowTrainingCatalog(true); }}
+              />
+            )}
             {activeView === 'users' && <UsersView key="users" users={filteredUsers} doctors={filteredDoctors} onRefresh={loadData} />}
             {activeView === 'patient-profile' && selectedPatientId && (
               <PatientProfileView 
@@ -9358,7 +9385,7 @@ function VisitModal({ onClose, doctors, onSubmit }: any) {
 
 /* Obsolete monolithic views are now modularized under components/ */
 
-function AppointmentsView({ appointments, doctors, patients, onRefresh, onSelectPatient, selectedBranch, currentUser }: { appointments: Appointment[], doctors: Doctor[], patients: Patient[], onRefresh: () => void, onSelectPatient?: (id: string, appointmentId?: string) => void, key?: string, selectedBranch: string, currentUser?: any }) {
+function AppointmentsView({ appointments, doctors, patients, onRefresh, onSelectPatient, selectedBranch, currentUser, onOpenHelp }: { appointments: Appointment[], doctors: Doctor[], patients: Patient[], onRefresh: () => void, onSelectPatient?: (id: string, appointmentId?: string) => void, key?: string, selectedBranch: string, currentUser?: any, onOpenHelp?: (step: any) => void }) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [hoveredZone, setHoveredZone] = useState<string | null>(null);
 
@@ -9510,6 +9537,16 @@ function AppointmentsView({ appointments, doctors, patients, onRefresh, onSelect
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">تنظيم مواعيد المرضى وتتبع سعة الأطباء</p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {onOpenHelp && (
+            <button
+              type="button"
+              onClick={() => onOpenHelp('appointments')}
+              className="bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-1.5 transition-all text-xs cursor-pointer active:scale-95 shadow-sm"
+            >
+              <BookOpen size={14} className="text-blue-600" />
+              <span>عرض شرح هذه القائمة</span>
+            </button>
+          )}
           <button 
             type="button"
             onClick={() => setShowDailyReportModal(true)}
@@ -10624,7 +10661,7 @@ function AppointmentModal({ onClose, onSubmit, doctors, patients, getDoctorLoad,
   );
 }
 
-function AuditLogsView({ logs, onRefresh, users }: { logs: AuditLog[], onRefresh?: () => void, key?: string, users: User[] }) {
+function AuditLogsView({ logs, onRefresh, users, onOpenHelp }: { logs: AuditLog[], onRefresh?: () => void, key?: string, users: User[], onOpenHelp?: (step: any) => void }) {
   const [actionFilter, setActionFilter] = useState<string>("all");
   const [userFilter, setUserFilter] = useState<string>("all");
   const [dateFilter, setDateFilter] = useState<string>("");
@@ -10681,16 +10718,29 @@ function AuditLogsView({ logs, onRefresh, users }: { logs: AuditLog[], onRefresh
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">تتبع الحركات والعمليات الحساسة في النظام</p>
         </div>
         
-        {/* Stats counter badge */}
-        <div className="bg-slate-50 border border-slate-150 rounded-xl px-4 py-2 flex items-center gap-3">
-          <div className="text-right">
-            <div className="text-[9px] text-slate-400 font-bold uppercase">العمليات المفلترة</div>
-            <div className="text-lg font-black text-slate-800">{filteredLogs.length} <span className="text-[10px] text-slate-400 font-medium">خطوة</span></div>
-          </div>
-          <span className="text-slate-300">|</span>
-          <div className="text-right">
-            <div className="text-[9px] text-slate-400 font-bold uppercase">إجمالي السجل</div>
-            <div className="text-lg font-black text-blue-600">{logs.length}</div>
+        <div className="flex flex-wrap items-center gap-3 self-end md:self-auto">
+          {onOpenHelp && (
+            <button
+              type="button"
+              onClick={() => onOpenHelp('operations')}
+              className="bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-1.5 transition-all text-xs cursor-pointer active:scale-95 shadow-sm"
+            >
+              <BookOpen size={14} className="text-blue-600" />
+              <span>عرض شرح هذه القائمة</span>
+            </button>
+          )}
+          
+          {/* Stats counter badge */}
+          <div className="bg-slate-50 border border-slate-150 rounded-xl px-4 py-2 flex items-center gap-3">
+            <div className="text-right">
+              <div className="text-[9px] text-slate-400 font-bold uppercase">العمليات المفلترة</div>
+              <div className="text-lg font-black text-slate-800">{filteredLogs.length} <span className="text-[10px] text-slate-400 font-medium">خطوة</span></div>
+            </div>
+            <span className="text-slate-300">|</span>
+            <div className="text-right">
+              <div className="text-[9px] text-slate-400 font-bold uppercase">إجمالي السجل</div>
+              <div className="text-lg font-black text-blue-600">{logs.length}</div>
+            </div>
           </div>
         </div>
       </header>
@@ -11971,7 +12021,7 @@ function ImportAppointmentsExcelModal({ onClose, doctors, patients, onComplete }
   );
 }
 
-function RoomsView({ patients, doctors, selectedBranch }: { patients: Patient[], doctors: Doctor[], selectedBranch: string, key?: string }) {
+function RoomsView({ patients, doctors, selectedBranch, onOpenHelp }: { patients: Patient[], doctors: Doctor[], selectedBranch: string, key?: string, onOpenHelp?: (step: any) => void }) {
   const [rooms, setRooms] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -12096,7 +12146,18 @@ function RoomsView({ patients, doctors, selectedBranch }: { patients: Patient[],
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">تتبع حالة وإشغال غرف الكشف وتوقيت المعاينات الفعلي</p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {onOpenHelp && (
+            <button
+              type="button"
+              onClick={() => onOpenHelp('rooms')}
+              className="bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-1.5 transition-all text-xs cursor-pointer active:scale-95 shadow-sm"
+            >
+              <BookOpen size={14} className="text-blue-600" />
+              <span>عرض شرح هذه القائمة</span>
+            </button>
+          )}
+
           <div className="bg-slate-50 border border-slate-150 rounded-xl px-4 py-2 flex items-center gap-3">
             <div className="text-right">
               <div className="text-[9px] text-red-500 font-bold uppercase">الغرف المشغولة 🔴</div>
